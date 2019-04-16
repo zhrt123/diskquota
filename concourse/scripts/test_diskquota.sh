@@ -53,7 +53,7 @@ function setup_gpadmin_user() {
 function install_diskquota() {
     if [ "${DEV_RELEASE}" == "release" ]; then
         tar -xzf bin_diskquota/diskquota*.tar.gz -C /usr/local/greenplum-db-devel
-    elif
+    else
         tar -xzf bin_diskquota/component_diskquota.tar.gz -C /usr/local/greenplum-db-devel
     fi
 }
