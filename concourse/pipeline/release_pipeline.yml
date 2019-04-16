@@ -43,9 +43,9 @@ resources:
 - name: diskquota_src
   type: git
   source:
-    branch: gpdb
+    branch: gpdbrelease
     uri: https://github.com/greenplum-db/diskquota.git
-	tag_filter: 1.*
+    tag_filter: 1.*
 
 # gpdb binary on gcs is located as different folder for different version
 # use gcs_gpdb_binary_folder to specify them.
@@ -103,7 +103,7 @@ jobs:
       params:
         OSVER: centos7
         GPDBVER: gp6
-		DEV_RELEASE: release
+        DEV_RELEASE: release
   - aggregate:
     - put: bin_diskquota_centos7
       params:
@@ -129,7 +129,7 @@ jobs:
       params:
         OSVER: centos6
         GPDBVER: gp6
-		DEV_RELEASE: release
+        DEV_RELEASE: release
   - aggregate:
     - put: bin_diskquota_centos6
       params:
@@ -155,6 +155,7 @@ jobs:
     params:
       OSVER: centos6
       GPDBVER: gp6
+      DEV_RELEASE: release
 
 - name: diskquota_centos7_test_release
   plan:
@@ -175,3 +176,4 @@ jobs:
     params:
       OSVER: centos7
       GPDBVER: gp6
+      DEV_RELEASE: release
