@@ -1,5 +1,5 @@
 ## ======================================================================
-## Pipeline for GPDB PL/R GPPKG
+## Pipeline for diskquota
 ## ======================================================================
 
 groups:
@@ -7,6 +7,7 @@ groups:
   jobs:
     - release_centos6
     - release_centos7
+    - release_ubuntu18
     - diskquota_centos6_test_release
     - diskquota_centos7_test_release
     - diskquota_ubuntu18_test_release
