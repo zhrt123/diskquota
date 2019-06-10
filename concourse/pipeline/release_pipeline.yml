@@ -57,7 +57,7 @@ resources:
 - name: diskquota_src
   type: git
   source:
-    branch: gpdb_hawu
+    branch: gpdb
     uri: https://github.com/greenplum-db/diskquota.git
     tag_filter: 0.*
 
