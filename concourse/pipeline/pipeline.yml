@@ -103,6 +103,7 @@ jobs:
       bin_diskquota: diskquota_artifacts
 
 - name: diskquota_centos6_build_test
+  max_in_flight: 3
   plan:
   - aggregate:
     - get: centos-gpdb-dev-6
@@ -121,6 +122,7 @@ jobs:
       bin_diskquota: diskquota_artifacts
 
 - name: diskquota_ubuntu18_build_test
+  max_in_flight: 3
   plan:
   - aggregate:
     - get: ubuntu18-image-build

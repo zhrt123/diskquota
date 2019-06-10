@@ -33,11 +33,11 @@ resources:
     repository: pivotaldata/centos-gpdb-dev
     tag: '7-gcc6.2-llvm3.7'
 
-#- name: ubuntu18-image-build
-#  type: docker-image
-#  source:
-#    repository: pivotaldata/gpdb6-ubuntu18.04-build
-#    tag: latest
+- name: ubuntu18-image-build
+  type: docker-image
+  source:
+    repository: pivotaldata/gpdb6-ubuntu18.04-build
+    tag: latest
   
 - name: ubuntu18-image-test
   type: docker-image
@@ -136,6 +136,7 @@ jobs:
         file: diskquota_artifacts/diskquota*.tar.gz
 
 - name: release_centos6
+  max_in_flight: 3
   plan:
   - aggregate:
     - get: centos-gpdb-dev-6
@@ -159,8 +160,34 @@ jobs:
       params:
         file: diskquota_artifacts/diskquota*.tar.gz
 
+- name: release_ubuntu18
+  max_in_flight: 3
+  plan:
+  - aggregate:
+    - get: ubuntu18-image-build
+    - get: ubuntu18-image-test
+    - get: diskquota_src
+      trigger: true
+    - get: bin_gpdb
+      resource: bin_gpdb_ubuntu18
+    - get: gpdb_src
+  - aggregate:
+    - task: build_diskquota
+      file: diskquota_src/concourse/tasks/build_diskquota.yml
+      image: ubuntu18-image-build
+  - aggregate:
+    - task: test_diskquota
+      file: diskquota_src/concourse/tasks/test_diskquota.yml
+      image: ubuntu18-image-test
+      input_mapping:
+        bin_diskquota: diskquota_artifacts
+  - aggregate:
+    - put: bin_diskquota_ubuntu18
+      params:
+        file: diskquota_artifacts/diskquota*.tar.gz
 
 - name: diskquota_centos6_test_release
+  max_in_flight: 3
   plan:
   - aggregate:
     - get: centos-gpdb-dev-6
@@ -176,6 +203,7 @@ jobs:
     image: centos-gpdb-dev-6
 
 - name: diskquota_centos7_test_release
+  max_in_flight: 3
   plan:
   - aggregate:
     - get: centos-gpdb-dev-7
@@ -191,6 +219,7 @@ jobs:
     image: centos-gpdb-dev-7
 
 - name: diskquota_ubuntu18_test_release
+  max_in_flight: 3
   plan:
   - aggregate:
     - get: ubuntu18-image-test
