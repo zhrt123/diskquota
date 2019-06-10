@@ -9,6 +9,7 @@ groups:
     - release_centos7
     - diskquota_centos6_test_release
     - diskquota_centos7_test_release
+    - diskquota_ubuntu18_test_release
 
 resource_types:
 - name: gcs
@@ -32,7 +33,13 @@ resources:
     repository: pivotaldata/centos-gpdb-dev
     tag: '7-gcc6.2-llvm3.7'
 
-- name: ubuntu18-image
+#- name: ubuntu18-image-build
+#  type: docker-image
+#  source:
+#    repository: pivotaldata/gpdb6-ubuntu18.04-build
+#    tag: latest
+  
+- name: ubuntu18-image-test
   type: docker-image
   source:
     repository: pivotaldata/gpdb6-ubuntu18.04-test
@@ -50,7 +57,7 @@ resources:
 - name: diskquota_src
   type: git
   source:
-    branch: gpdb
+    branch: gpdb_hawu
     uri: https://github.com/greenplum-db/diskquota.git
     tag_filter: 0.*
 
@@ -117,42 +124,36 @@ jobs:
     - task: build_diskquota
       file: diskquota_src/concourse/tasks/build_diskquota.yml
       image: centos-gpdb-dev-7
-      params:
-        OSVER: centos7
   - aggregate:
     - task: test_diskquota
       file: diskquota_src/concourse/tasks/test_diskquota.yml
       image: centos-gpdb-dev-7
       input_mapping:
         bin_diskquota: diskquota_artifacts
-      params:
-        OSVER: centos7
   - aggregate:
     - put: bin_diskquota_centos7
       params:
         file: diskquota_artifacts/diskquota*.tar.gz
 
 - name: release_centos6
-  max_in_flight: 3
   plan:
   - aggregate:
     - get: centos-gpdb-dev-6
     - get: diskquota_src
       trigger: true
-    - get: bin_gpdb_centos6
+    - get: bin_gpdb
+      resource: bin_gpdb_centos6
     - get: gpdb_src
   - aggregate:
     - task: build_diskquota
       file: diskquota_src/concourse/tasks/build_diskquota.yml
       image: centos-gpdb-dev-6
+  - aggregate:
+    - task: test_diskquota
+      file: diskquota_src/concourse/tasks/test_diskquota.yml
+      image: centos-gpdb-dev-6
       input_mapping:
-        bin_gpdb: bin_gpdb_centos6
-      output_mapping:
-        bin_diskquota: bin_diskquota_centos6
-      params:
-        OSVER: centos6
-        GPDBVER: gp6
-        DEV_RELEASE: release
+        bin_diskquota: diskquota_artifacts
   - aggregate:
     - put: bin_diskquota_centos6
       params:
@@ -192,7 +193,7 @@ jobs:
 - name: diskquota_ubuntu18_test_release
   plan:
   - aggregate:
-    - get: ubuntu18-image
+    - get: ubuntu18-image-test
     - get: diskquota_src
     - get: bin_diskquota
       resource: bin_diskquota_ubuntu18
@@ -202,4 +203,4 @@ jobs:
     - get: gpdb_src
   - task: test_diskquota
     file: diskquota_src/concourse/tasks/test_diskquota.yml
-    image: ubuntu18-image
+    image: ubuntu18-image-test
