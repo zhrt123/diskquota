@@ -39,7 +39,7 @@ function test(){
 }	
 
 function setup_gpadmin_user() {
-    ${GPDB_CONCOURSE_DIR}/setup_gpadmin_user.bash "sles"
+    ${GPDB_CONCOURSE_DIR}/setup_gpadmin_user.bash
 }
 
 function install_diskquota() {
