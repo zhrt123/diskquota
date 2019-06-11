@@ -388,7 +388,7 @@ disk_quota_worker_main(Datum main_arg)
 	proc_exit(0);
 }
 
-inline bool isAbnormalLoopTime(int diff_sec)
+static inline bool isAbnormalLoopTime(int diff_sec)
 {
 	int max_time = diskquota_naptime + 6;
 	return diff_sec > max_time;
