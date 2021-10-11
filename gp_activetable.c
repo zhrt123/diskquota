@@ -127,7 +127,7 @@ init_shm_worker_active_tables(void)
 									  &ctl,
 									  HASH_ELEM | HASH_FUNCTION);
 
-	ctl.keysize = sizeof(Oid);
+	ctl.keysize = sizeof(RelFileNode);
 	ctl.entrysize = sizeof(DiskQuotaRelidCacheEntry);
 	ctl.hash = tag_hash;
 
@@ -209,13 +209,13 @@ active_table_hook_smgrunlink(RelFileNodeBackend rnode)
 	DiskQuotaRelidCacheEntry *entry;
 
 	LWLockAcquire(diskquota_locks.pg_class_cache_lock, LW_EXCLUSIVE);
-	entry = hash_search(relid_cache, &rnode.node.relNode, HASH_FIND, &found);
+	entry = hash_search(relid_cache, &rnode.node, HASH_FIND, &found);
 	if (found)
 	{
 		Oid relid = entry->relid;
 		hash_search(pg_class_cache, &relid, HASH_REMOVE, NULL);
 		hash_search(relation_map, &relid, HASH_REMOVE, NULL);
-		hash_search(relid_cache, &rnode.node.relNode, HASH_REMOVE, NULL);
+		hash_search(relid_cache, &rnode.node, HASH_REMOVE, NULL);
 	}
 	LWLockRelease(diskquota_locks.pg_class_cache_lock);
 }
@@ -289,7 +289,7 @@ object_access_hook_QuotaStmt(ObjectAccessType access, Oid classId, Oid objectId,
 	relid_cache_entry = hash_search(relid_cache, &relfileNode.relNode, HASH_ENTER_NULL, &found);
 	if (relid_cache_entry)
 	{
-		relid_cache_entry->relfilenode = relfileNode.relNode;
+		relid_cache_entry->relfilenode = relfileNode;
 		relid_cache_entry->relid = objectId;
 	}
 
@@ -304,7 +304,7 @@ object_access_hook_QuotaStmt(ObjectAccessType access, Oid classId, Oid objectId,
 		relation_entry = hash_search(relation_map, &objectId, HASH_FIND, &found);
 		if(relation_entry)
 		{
-			relation_entry->relfilenode = relfileNode.relNode;
+			relation_entry->relfilenode = relfileNode;
 		}
 	}
 	LWLockRelease(diskquota_locks.pg_class_cache_lock);
@@ -331,7 +331,7 @@ do_update_relation_map(Oid relid, Oid ptable_oid)
 		}
 
 		entry->relid = relid;
-		entry->relfilenode = rel->rd_node.relNode;
+		entry->relfilenode = rel->rd_node;
 		entry->primary_table_oid = ptable_oid;
 		
 		// add relation mapping: ao table index -> primary table
@@ -448,7 +448,7 @@ report_active_table_helper(const RelFileNode *relFileNode)
 		{
 			Oid relid;
 			LWLockAcquire(diskquota_locks.pg_class_cache_lock, LW_SHARED);
-			relid_cache_entry = hash_search(relid_cache, &relFileNode->relNode, HASH_FIND, &found);
+			relid_cache_entry = hash_search(relid_cache, &relFileNode, HASH_FIND, &found);
 			if (found)
 			{
 				relid = relid_cache_entry->relid;
