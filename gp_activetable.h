@@ -28,13 +28,9 @@ typedef struct DiskQuotaActiveTableEntry
 typedef struct DiskQuotaRelationCacheEntry
 {
 	Oid 				relid;
-	Oid					toast_relid;
-	Oid					toast_idx_relid;
-	Oid					seg_relid;
-	Oid					blkdir_relid;
-	Oid					visimap_relid;
-	Oid					visimapindex_relid;
 	Oid					primary_table_relid;
+	Oid					subrel_oid[10];
+	Oid					subrel_num;
 	Oid					owneroid;
 	Oid					namespaceoid;
 	RelFileNodeBackend	rnode;

@@ -583,6 +583,7 @@ init_lwlocks(void)
 	diskquota_locks.extension_ddl_lock = LWLockAssign();
 	diskquota_locks.monitoring_dbid_cache_lock = LWLockAssign();
 	diskquota_locks.paused_lock = LWLockAssign();
+	diskquota_locks.relation_cache_lock = LWLockAssign();
 }
 
 /*

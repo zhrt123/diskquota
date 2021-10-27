@@ -36,6 +36,7 @@ struct DiskQuotaLocks
 	LWLock	   *extension_ddl_lock; /* ensure create diskquota extension serially */
 	LWLock	   *monitoring_dbid_cache_lock;
 	LWLock	   *paused_lock;
+	LWLock	   *relation_cache_lock;
 };
 typedef struct DiskQuotaLocks DiskQuotaLocks;
 #define DiskQuotaLocksItemNumber (sizeof(DiskQuotaLocks) / sizeof(void*))

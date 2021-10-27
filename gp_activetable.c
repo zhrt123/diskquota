@@ -915,6 +915,105 @@ pull_active_table_size_from_seg(HTAB *local_table_stats_map, char *active_oid_ar
 	return;
 }
 
+static void
+add_subrel_to_relation_cache_entry(DiskQuotaRelationCacheEntry *entry, Oid relid)
+{
+	entry->subrel_oid[entry->subrel_num++] = relid;
+}
+
+static void
+do_update_relation_cache(Oid relid, DiskQuotaRelationCacheEntry *pentry)
+{
+	bool found;
+	Relation rel;
+	DiskQuotaRelationCacheEntry *entry;
+	
+	rel = relation_open(relid, NoLock);
+
+	entry = hash_search(relation_cache, &relid, HASH_ENTER, &found);
+	if (!found)
+	{
+		memset(entry, 0, sizeof(DiskQuotaRelationCacheEntry));
+		entry->relid = relid;
+	}
+	
+	entry->primary_table_relid = pentry->relid;
+	add_subrel_to_relation_cache_entry(pentry, relid);
+
+	if (rel->rd_rel && rel->rd_rel->relhasindex)
+	{
+		List	   *index_oids = RelationGetIndexList(rel);
+		ListCell   *cell;
+
+		foreach(cell, index_oids)
+		{
+			Oid	idxOid = lfirst_oid(cell);
+			do_update_relation_cache(idxOid, pentry);
+		}
+
+		list_free(index_oids);
+	}
+
+	relation_close(rel, NoLock);
+}
+
+static void
+update_relation_cache(Oid relid)
+{
+	// elog(WARNING, "update_relation_map: %d", relid);
+	Relation rel = relation_open(relid, NoLock);
+	DiskQuotaRelationCacheEntry *entry;
+	bool found;
+
+	LWLockAcquire(diskquota_locks.relation_cache_lock, LW_EXCLUSIVE);
+
+	entry = hash_search(relation_cache, &relid, HASH_ENTER, &found);
+	if (!found)
+	{
+		memset(entry, 0, sizeof(DiskQuotaRelationCacheEntry));
+		entry->relid = relid;
+	}
+
+	entry->rnode.node = rel->rd_node;
+	entry->rnode.backend = rel->rd_backend;
+	entry->owneroid = rel->rd_rel->relowner;
+	entry->namespaceoid = rel->rd_rel->relnamespace;
+
+	if (rel->rd_rel->relkind == 'r' || rel->rd_rel->relkind == 'm')
+	{
+		entry->primary_table_relid = relid;
+
+		// toast table
+		if (OidIsValid(rel->rd_rel->reltoastrelid))
+		{
+			do_update_relation_cache(rel->rd_rel->reltoastrelid, entry);
+		}
+
+		// ao table
+		if (RelationIsAppendOptimized(rel) && rel->rd_appendonly != NULL)
+		{
+			// Assert(OidIsValid(rel->rd_appendonly->segrelid));
+			if (OidIsValid(rel->rd_appendonly->segrelid))
+			{
+				do_update_relation_cache(rel->rd_appendonly->segrelid, entry);
+			}
+
+			/* block directory may not exist, post upgrade or new table that never has indexes */
+			if (OidIsValid(rel->rd_appendonly->blkdirrelid))
+			{
+				do_update_relation_cache(rel->rd_appendonly->blkdirrelid, entry);
+			}
+			if (OidIsValid(rel->rd_appendonly->visimaprelid))
+			{
+				do_update_relation_cache(rel->rd_appendonly->visimaprelid, entry);
+			}
+		}
+	}
+
+	LWLockRelease(diskquota_locks.relation_cache_lock);
+	relation_close(rel, NoLock);
+}
+
 static bool
 compare_relfilenode(RelFileNode *relfile1, RelFileNode *relfile2)
 {
