@@ -14,20 +14,19 @@
 
 #include "miscadmin.h"
 #include "fmgr.h"
-#include "utils/fmgrprotos.h"
 
 #include "gp_utils.h"
 
 #include <sys/stat.h>
 
-Size diskquota_get_relation_size_by_relfilenode(RelFileNode *rfn);
+Size diskquota_get_relation_size_by_relfilenode(RelFileNodeBackend *rnode);
 
 /*
  * calculate size of (one fork of) a table in transaction
  * This function is following calculate_relation_size()
  */
 Size
-diskquota_get_relation_size_by_relfilenode(RelFileNode *rfn)
+diskquota_get_relation_size_by_relfilenode(RelFileNodeBackend *rnode)
 {
     int64       totalsize = 0;
     ForkNumber  forkNum;
@@ -38,7 +37,7 @@ diskquota_get_relation_size_by_relfilenode(RelFileNode *rfn)
 
     for (forkNum = 0; forkNum <= MAX_FORKNUM; forkNum++)
     {
-        relationpath = relpathperm(*rfn, forkNum);
+        relationpath = relpathbackend(rnode->node, rnode->backend, forkNum);
         size = 0;
 
         for (segcount = 0;; segcount++)
