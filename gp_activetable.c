@@ -52,6 +52,7 @@ typedef struct DiskQuotaSetOFCache
 
 HTAB	   *active_tables_map = NULL;
 HTAB	   *monitoring_dbid_cache = NULL;
+HTAB	   *relation_cache = NULL;
 
 /* active table hooks which detect the disk file size change. */
 static file_create_hook_type prev_file_create_hook = NULL;
@@ -90,6 +91,17 @@ init_shm_worker_active_tables(void)
 	ctl.hash = tag_hash;
 
 	active_tables_map = ShmemInitHash("active_tables",
+									  diskquota_max_active_tables,
+									  diskquota_max_active_tables,
+									  &ctl,
+									  HASH_ELEM | HASH_FUNCTION);
+	memset(&ctl, 0, sizeof(ctl));
+
+	ctl.keysize = sizeof(Oid);
+	ctl.entrysize = sizeof(DiskQuotaRelationCacheEntry);
+	ctl.hash = tag_hash;
+
+	relation_cache = ShmemInitHash("relation_cache",
 									  diskquota_max_active_tables,
 									  diskquota_max_active_tables,
 									  &ctl,
