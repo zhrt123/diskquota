@@ -76,6 +76,10 @@ void		init_shm_worker_active_tables(void);
 void		init_lock_active_tables(void);
 HTAB	   *gp_fetch_active_tables(bool is_init);
 
+static RelFileNodeBackend get_relfilenode_by_relid(Oid relid);
+static Oid get_relid_by_relfilenode(RelFileNode relfilenode);
+
+
 /*
  * Init active_tables_map shared memory
  */
@@ -909,4 +913,65 @@ pull_active_table_size_from_seg(HTAB *local_table_stats_map, char *active_oid_ar
 	}
 	cdbdisp_clearCdbPgResults(&cdb_pgresults);
 	return;
+}
+
+static bool
+compare_relfilenode(RelFileNode *relfile1, RelFileNode *relfile2)
+{
+	return relfile1->relNode == relfile2->relNode &&
+		   relfile1->dbNode == relfile2->dbNode &&
+		   relfile1->spcNode == relfile2->spcNode;
+}
+
+static RelFileNodeBackend
+get_relfilenode_by_relid(Oid relid)
+{
+	DiskQuotaRelationCacheEntry *relation_cache_entry;
+	RelFileNodeBackend rnode = {0};
+	Relation rel;
+	
+	rel = try_relation_open(relid, AccessShareLock, false);
+	if (rel)
+	{
+		rnode.node = rel->rd_node;
+		rnode.backend = rel->rd_backend;
+		relation_close(rel, AccessShareLock);
+		return rnode;
+	}
+
+	relation_cache_entry = hash_search(relation_cache, &relid, HASH_FIND, NULL);
+	if (relation_cache_entry)
+	{
+		rnode = relation_cache_entry->rnode;
+		return rnode;
+	}
+
+	return rnode;
+}
+
+/*
+ * 1. get relid from pg_class
+ * 2. remove cache_entry from pg_class_cache, if pg_class exists
+ */
+static Oid
+get_relid_by_relfilenode(RelFileNode relfilenode)
+{
+	Oid relid;
+
+	relid = RelidByRelfilenode(relfilenode.spcNode, relfilenode.relNode);
+	if(!OidIsValid(relid))
+	{
+		HASH_SEQ_STATUS iter;
+		DiskQuotaRelationCacheEntry *relation_cache_entry;
+
+		hash_seq_init(&iter, relation_cache);
+		while ((relation_cache_entry = hash_seq_search(&iter)) != NULL)
+		{
+			if(compare_relfilenode(&relation_cache_entry->rnode.node, &relfilenode))
+			{
+				relid = relation_cache_entry->relid;
+			}
+		}
+	}
+	return relid;
 }
