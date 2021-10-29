@@ -19,6 +19,7 @@
 #include "catalog/indexing.h"
 #include "catalog/pg_class.h"
 #include "catalog/pg_type.h"
+#include "catalog/objectaccess.h"
 #include "cdb/cdbbufferedappend.h"
 #include "cdb/cdbdisp_query.h"
 #include "cdb/cdbdispatchresult.h"
@@ -58,10 +59,12 @@ HTAB	   *relation_cache = NULL;
 static file_create_hook_type prev_file_create_hook = NULL;
 static file_extend_hook_type prev_file_extend_hook = NULL;
 static file_truncate_hook_type prev_file_truncate_hook = NULL;
+static object_access_hook_type prev_object_access_hook = NULL;
 
 static void active_table_hook_smgrcreate(RelFileNodeBackend rnode);
 static void active_table_hook_smgrextend(RelFileNodeBackend rnode);
 static void active_table_hook_smgrtruncate(RelFileNodeBackend rnode);
+static void object_access_hook_QuotaStmt(ObjectAccessType access, Oid classId, Oid objectId, int subId, void *arg);
 
 static HTAB *get_active_tables_stats(ArrayType *array);
 static HTAB *get_active_tables_oid(void);
@@ -78,7 +81,7 @@ HTAB	   *gp_fetch_active_tables(bool is_init);
 
 static RelFileNodeBackend get_relfilenode_by_relid(Oid relid);
 static Oid get_relid_by_relfilenode(RelFileNode relfilenode);
-
+static void update_relation_cache(Oid relid);
 
 /*
  * Init active_tables_map shared memory
@@ -126,6 +129,9 @@ init_active_table_hook(void)
 
 	prev_file_truncate_hook = file_truncate_hook;
 	file_truncate_hook = active_table_hook_smgrtruncate;
+
+	prev_object_access_hook = object_access_hook;
+	object_access_hook = object_access_hook_QuotaStmt;
 }
 
 /*
@@ -164,6 +170,36 @@ active_table_hook_smgrtruncate(RelFileNodeBackend rnode)
 		(*prev_file_truncate_hook) (rnode);
 
 	report_active_table_helper(&rnode);
+}
+
+static void object_access_hook_QuotaStmt(ObjectAccessType access, Oid classId, Oid objectId, int subId, void *arg)
+{
+	if (prev_object_access_hook)
+		(*prev_object_access_hook)(access, classId, objectId, subId, arg);
+
+	// TODO: do we need to use "and" instead of "or"?
+	if (classId != RelationRelationId || subId != 0)
+	{
+		return;
+	}
+
+	if (objectId < FirstNormalObjectId)
+	{
+		return;
+	}
+
+	if (access != OAT_POST_CREATE && access != OAT_POST_ALTER)
+	{
+		return;
+	}
+
+	// check whether quota limit is reached
+	// quota_check_common(objectId);
+
+	/* 1. CREATE/ALTER TALBE: update relfilenode/namespace/owner
+	 * 2. ALTER TABLE: update relation between primary table and toast/ao table
+	 */
+	update_relation_cache(objectId);
 }
 
 /*
