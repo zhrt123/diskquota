@@ -59,11 +59,13 @@ HTAB	   *relation_cache = NULL;
 static file_create_hook_type prev_file_create_hook = NULL;
 static file_extend_hook_type prev_file_extend_hook = NULL;
 static file_truncate_hook_type prev_file_truncate_hook = NULL;
+static file_unlink_hook_type prev_file_unlink_hook = NULL;
 static object_access_hook_type prev_object_access_hook = NULL;
 
 static void active_table_hook_smgrcreate(RelFileNodeBackend rnode);
 static void active_table_hook_smgrextend(RelFileNodeBackend rnode);
 static void active_table_hook_smgrtruncate(RelFileNodeBackend rnode);
+static void active_table_hook_smgrunlink(RelFileNodeBackend rnode);
 static void object_access_hook_QuotaStmt(ObjectAccessType access, Oid classId, Oid objectId, int subId, void *arg);
 
 static HTAB *get_active_tables_stats(ArrayType *array);
@@ -82,7 +84,7 @@ HTAB	   *gp_fetch_active_tables(bool is_init);
 static RelFileNodeBackend get_relfilenode_by_relid(Oid relid);
 static Oid get_relid_by_relfilenode(RelFileNode relfilenode);
 static void update_relation_cache(Oid relid);
-
+static Oid get_uncommitted_table_relid(RelFileNode relfilenode);
 /*
  * Init active_tables_map shared memory
  */
@@ -130,6 +132,9 @@ init_active_table_hook(void)
 	prev_file_truncate_hook = file_truncate_hook;
 	file_truncate_hook = active_table_hook_smgrtruncate;
 
+	prev_file_unlink_hook = file_unlink_hook;
+	file_unlink_hook = active_table_hook_smgrunlink;
+
 	prev_object_access_hook = object_access_hook;
 	object_access_hook = object_access_hook_QuotaStmt;
 }
@@ -170,6 +175,17 @@ active_table_hook_smgrtruncate(RelFileNodeBackend rnode)
 		(*prev_file_truncate_hook) (rnode);
 
 	report_active_table_helper(&rnode);
+}
+
+static void active_table_hook_smgrunlink(RelFileNodeBackend rnode)
+{
+	if (prev_file_unlink_hook)
+		(*prev_file_unlink_hook) (rnode);
+
+	LWLockAcquire(diskquota_locks.relation_cache_lock, LW_EXCLUSIVE);
+	Oid relid = get_uncommitted_table_relid(rnode.node);
+	hash_search(relation_cache, &relid, HASH_REMOVE, NULL);
+	LWLockRelease(diskquota_locks.relation_cache_lock);
 }
 
 static void object_access_hook_QuotaStmt(ObjectAccessType access, Oid classId, Oid objectId, int subId, void *arg)
@@ -1096,16 +1112,24 @@ get_relid_by_relfilenode(RelFileNode relfilenode)
 	relid = RelidByRelfilenode(relfilenode.spcNode, relfilenode.relNode);
 	if(!OidIsValid(relid))
 	{
-		HASH_SEQ_STATUS iter;
-		DiskQuotaRelationCacheEntry *relation_cache_entry;
+		relid = get_uncommitted_table_relid(relfilenode);
+	}
+	return relid;
+}
 
-		hash_seq_init(&iter, relation_cache);
-		while ((relation_cache_entry = hash_seq_search(&iter)) != NULL)
+static Oid
+get_uncommitted_table_relid(RelFileNode relfilenode)
+{
+	Oid relid = InvalidOid;
+	HASH_SEQ_STATUS iter;
+	DiskQuotaRelationCacheEntry *relation_cache_entry;
+
+	hash_seq_init(&iter, relation_cache);
+	while ((relation_cache_entry = hash_seq_search(&iter)) != NULL)
+	{
+		if(compare_relfilenode(&relation_cache_entry->rnode.node, &relfilenode))
 		{
-			if(compare_relfilenode(&relation_cache_entry->rnode.node, &relfilenode))
-			{
-				relid = relation_cache_entry->relid;
-			}
+			relid = relation_cache_entry->relid;
 		}
 	}
 	return relid;
