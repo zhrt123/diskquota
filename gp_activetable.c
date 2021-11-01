@@ -162,6 +162,17 @@ active_table_hook_smgrextend(RelFileNodeBackend rnode)
 	if (prev_file_extend_hook)
 		(*prev_file_extend_hook) (rnode);
 
+	LWLockAcquire(diskquota_locks.relation_cache_lock, LW_SHARED);
+	Oid relid = get_uncommitted_table_relid(rnode.node);
+	LWLockRelease(diskquota_locks.relation_cache_lock);
+
+	if (OidIsValid(relid))
+	{
+		// quota_check_common(relid);
+
+		update_relation_cache(relid);
+	}
+
 	report_active_table_helper(&rnode);
 }
 
@@ -215,7 +226,7 @@ static void object_access_hook_QuotaStmt(ObjectAccessType access, Oid classId, O
 	/* 1. CREATE/ALTER TALBE: update relfilenode/namespace/owner
 	 * 2. ALTER TABLE: update relation between primary table and toast/ao table
 	 */
-	update_relation_cache(objectId);
+	// update_relation_cache(objectId);
 }
 
 /*
@@ -1012,12 +1023,12 @@ do_update_relation_cache(Oid relid, DiskQuotaRelationCacheEntry *pentry)
 static void
 update_relation_cache(Oid relid)
 {
-	// elog(WARNING, "update_relation_map: %d", relid);
-	Relation rel = relation_open(relid, NoLock);
+	Relation rel;
 	DiskQuotaRelationCacheEntry *entry;
 	bool found;
 
 	LWLockAcquire(diskquota_locks.relation_cache_lock, LW_EXCLUSIVE);
+	rel = relation_open(relid, NoLock);
 
 	entry = hash_search(relation_cache, &relid, HASH_ENTER, &found);
 	if (!found)
@@ -1062,8 +1073,8 @@ update_relation_cache(Oid relid)
 		}
 	}
 
-	LWLockRelease(diskquota_locks.relation_cache_lock);
 	relation_close(rel, NoLock);
+	LWLockRelease(diskquota_locks.relation_cache_lock);
 }
 
 static bool
@@ -1079,25 +1090,31 @@ get_relfilenode_by_relid(Oid relid)
 {
 	DiskQuotaRelationCacheEntry *relation_cache_entry;
 	RelFileNodeBackend rnode = {0};
+	RelFileNodeBackend uncommitted_rnode = {0};
 	Relation rel;
 	
 	rel = try_relation_open(relid, AccessShareLock, false);
+	
+	relation_cache_entry = hash_search(relation_cache, &relid, HASH_FIND, NULL);
+	if (relation_cache_entry)
+	{
+		uncommitted_rnode = relation_cache_entry->rnode;
+	}
+
 	if (rel)
 	{
 		rnode.node = rel->rd_node;
 		rnode.backend = rel->rd_backend;
 		relation_close(rel, AccessShareLock);
+		if (!compare_relfilenode(&rnode.node, &uncommitted_rnode.node))
+		{
+			update_relation_cache(relid);
+		}
 		return rnode;
 	}
 
-	relation_cache_entry = hash_search(relation_cache, &relid, HASH_FIND, NULL);
-	if (relation_cache_entry)
-	{
-		rnode = relation_cache_entry->rnode;
-		return rnode;
-	}
 
-	return rnode;
+	return uncommitted_rnode;
 }
 
 /*
@@ -1108,13 +1125,19 @@ static Oid
 get_relid_by_relfilenode(RelFileNode relfilenode)
 {
 	Oid relid;
+	Oid uncommitted_relid;
 
 	relid = RelidByRelfilenode(relfilenode.spcNode, relfilenode.relNode);
-	if(!OidIsValid(relid))
+	uncommitted_relid = get_uncommitted_table_relid(relfilenode);
+	if(OidIsValid(relid))
 	{
-		relid = get_uncommitted_table_relid(relfilenode);
+		if(relid != uncommitted_relid)
+		{
+			update_relation_cache(relid);
+		}
+		return relid;
 	}
-	return relid;
+	return uncommitted_relid;
 }
 
 static Oid
