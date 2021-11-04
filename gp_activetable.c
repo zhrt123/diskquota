@@ -18,6 +18,7 @@
 #include "access/htup_details.h"
 #include "catalog/indexing.h"
 #include "catalog/pg_class.h"
+#include "catalog/pg_namespace.h"
 #include "catalog/pg_type.h"
 #include "catalog/objectaccess.h"
 #include "cdb/cdbbufferedappend.h"
@@ -81,6 +82,7 @@ void		init_active_table_hook(void);
 void		init_shm_worker_active_tables(void);
 void		init_lock_active_tables(void);
 HTAB	   *gp_fetch_active_tables(bool is_init);
+Size 		calculate_table_size(Oid relid);
 
 static bool check_table_commit_status(Oid relid);
 static RelFileNodeBackend get_relfilenode_by_relid(Oid relid);
@@ -230,7 +232,7 @@ static void object_access_hook_QuotaStmt(ObjectAccessType access, Oid classId, O
 	/* 1. CREATE/ALTER TALBE: update relfilenode/namespace/owner
 	 * 2. ALTER TABLE: update relation between primary table and toast/ao table
 	 */
-	bool is_internal = ((ObjectAccessPostAlter*)arg)->is_internal;
+	bool is_internal = access == OAT_POST_ALTER ? ((ObjectAccessPostAlter*)arg)->is_internal : ((ObjectAccessPostCreate*)arg)->is_internal;
 	if (is_internal == false)
 	{
 		LWLockAcquire(diskquota_locks.relation_cache_lock, LW_EXCLUSIVE);
@@ -254,8 +256,8 @@ report_active_table_helper(const RelFileNodeBackend *relFileNode)
 	Oid dbid = relFileNode->node.dbNode;
 
 	
-	/* We do not collect the active table in either master or mirror segments  */
-	if (IS_QUERY_DISPATCHER() || IsRoleMirror())
+	/* We do not collect the active table in mirror segments  */
+	if (IsRoleMirror())
 	{
 		return;
 	}
@@ -498,7 +500,9 @@ calculate_committed_table_size(Oid relid)
 	}
 	PG_CATCH();
 	{
+		HOLD_INTERRUPTS();
 		FlushErrorState();
+		RESUME_INTERRUPTS();
 		tablesize = 0;
 	}
 	PG_END_TRY();
@@ -532,7 +536,7 @@ calculate_uncommitted_table_size(Oid relid)
 	return tablesize;
 }
 
-static Size
+Size
 calculate_table_size(Oid relid)
 {
 	bool committed = check_table_commit_status(relid);
@@ -1105,6 +1109,13 @@ update_relation_cache(Oid relid)
 	DiskQuotaRelationCacheEntry *entry;
 	bool found;
 	bool success_open = false;
+	Oid dbid;
+	
+	/* We do not collect the active table in mirror segments  */
+	if (IsRoleMirror())
+	{
+		return;
+	}
 
 	PG_TRY();
 	{
@@ -1125,6 +1136,18 @@ update_relation_cache(Oid relid)
 		return;
 	}
 
+	/* do not collect active table info when the database is not under monitoring.
+	 * this operation is read-only and does not require absolutely exact.
+	 * read the cache with out shared lock */
+	dbid = rel->rd_node.dbNode;
+	hash_search(monitoring_dbid_cache, &dbid, HASH_FIND, &found);
+
+	if (!found)
+	{
+		relation_close(rel, NoLock);
+		return;
+	}
+
 	entry = hash_search(relation_cache, &relid, HASH_ENTER, &found);
 	if (!found)
 	{
@@ -1136,6 +1159,14 @@ update_relation_cache(Oid relid)
 	entry->rnode.backend = rel->rd_backend;
 	entry->owneroid = rel->rd_rel->relowner;
 	entry->namespaceoid = rel->rd_rel->relnamespace;
+
+	if (rel->rd_rel->relkind == 'i' && (rel->rd_rel->relnamespace != PG_AOSEGMENT_NAMESPACE 
+									|| rel->rd_rel->relnamespace != PG_TOAST_NAMESPACE 
+									|| rel->rd_rel->relnamespace != PG_AOSEGMENT_NAMESPACE
+									|| rel->rd_rel->relnamespace != PG_BITMAPINDEX_NAMESPACE))
+	{
+		entry->primary_table_relid = relid;
+	}
 
 	if (rel->rd_rel->relkind == 'r' || rel->rd_rel->relkind == 'm')
 	{
