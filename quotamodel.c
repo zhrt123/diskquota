@@ -857,6 +857,68 @@ refresh_disk_quota_usage(bool is_init)
 	return;
 }
 
+static List*
+merge_uncommitted_table_to_oidlist(List *oidlist)
+{
+	HTAB	   		   			*local_oid_cache = NULL;
+	HASHCTL						 ctl;
+	HASH_SEQ_STATUS 			 iter;
+	Oid							 relid;
+	ListCell   		   			*l;
+	DiskQuotaRelationCacheEntry *entry;
+	DiskQuotaRelationCacheEntry *local_entry;
+	bool found;
+
+	if (relation_cache == NULL)
+	{
+		return oidlist;
+	}
+
+	memset(&ctl, 0, sizeof(ctl));
+	ctl.keysize = sizeof(Oid);
+	ctl.entrysize = sizeof(DiskQuotaRelationCacheEntry);
+	ctl.hcxt = CurrentMemoryContext;
+	ctl.hash = tag_hash;
+
+	local_oid_cache = hash_create("local relation cache",
+										1024,
+										&ctl,
+										HASH_ELEM | HASH_CONTEXT | HASH_FUNCTION);
+
+	LWLockAcquire(diskquota_locks.relation_cache_lock, LW_SHARED);
+	hash_seq_init(&iter, relation_cache);
+	while ((entry = hash_seq_search(&iter)) != NULL)
+	{
+		if (entry->primary_table_relid != entry->relid)
+		{
+			continue;
+		}
+		local_entry = hash_search(local_oid_cache, &entry->relid, HASH_ENTER_NULL, &found);
+		if (!found && local_entry)
+		{
+			local_entry->relid = entry->relid;
+		}
+	}
+	LWLockRelease(diskquota_locks.relation_cache_lock);
+
+	foreach(l, oidlist)
+	{
+		relid = lfirst_oid(l);
+		hash_search(local_oid_cache, &relid, HASH_REMOVE, NULL);
+	}
+	
+	/* unmonitored table maybe in relation_cache */
+	hash_seq_init(&iter, local_oid_cache);
+	while ((local_entry = hash_seq_search(&iter)) != NULL)
+	{
+		oidlist = lappend_oid(oidlist, local_entry->relid);
+	}
+
+	hash_destroy(local_oid_cache);
+
+	return oidlist;
+}
+
 /*
  *  Incremental way to update the disk quota of every database objects
  *  Recalculate the table's disk usage when it's a new table or active table.
@@ -905,19 +967,41 @@ calculate_table_disk_usage(bool is_init)
 	 * and role_size_map
 	 */
 	oidlist = get_rel_oid_list();
+
+	oidlist = merge_uncommitted_table_to_oidlist(oidlist);
+	
 	foreach(l, oidlist)
 	{
 		HeapTuple	classTup;
-		Form_pg_class classForm;
+		Form_pg_class classForm = NULL;
+		Oid relnamespace = InvalidOid;
+		Oid relowner = InvalidOid;
+		Oid reltablespace = InvalidOid;
 		relOid = lfirst_oid(l);
 
 		classTup = SearchSysCacheCopy1(RELOID, ObjectIdGetDatum(relOid));
-		if (!HeapTupleIsValid(classTup))
+		if (HeapTupleIsValid(classTup))
 		{
-			elog(WARNING, "cache lookup failed for relation %u", relOid);
-			continue;
+			classForm = (Form_pg_class) GETSTRUCT(classTup);
+			relnamespace = classForm->relnamespace;
+			relowner = classForm->relowner;
+			reltablespace = classForm->reltablespace;
 		}
-		classForm = (Form_pg_class) GETSTRUCT(classTup);
+		else
+		{
+			LWLockAcquire(diskquota_locks.relation_cache_lock, LW_SHARED);
+			DiskQuotaRelationCacheEntry *relation_entry = hash_search(relation_cache, &relOid, HASH_FIND, NULL);
+			if (relation_entry == NULL)
+			{
+				elog(WARNING, "cache lookup failed for relation %u", relOid);
+				LWLockRelease(diskquota_locks.relation_cache_lock);
+				continue;
+			}
+			relnamespace = relation_entry->namespaceoid;
+			relowner = relation_entry->owneroid;
+			reltablespace = relation_entry->rnode.node.spcNode;
+			LWLockRelease(diskquota_locks.relation_cache_lock);
+		}
 
 		/*
 		 * The segid is the same as the content id in gp_segment_configuration
@@ -956,19 +1040,8 @@ calculate_table_disk_usage(bool is_init)
 					/* pretend process as utility mode, and append the table size on master */
 					Gp_role = GP_ROLE_UTILITY;
 
+					active_table_entry->tablesize += calculate_table_size(relOid);
 					/* DirectFunctionCall1 may fail, since table maybe dropped by other backend */
-					PG_TRY();
-					{
-						/* call pg_table_size to get the active table size */
-						active_table_entry->tablesize += (Size) DatumGetInt64(DirectFunctionCall1(pg_table_size, ObjectIdGetDatum(relOid)));
-					}
-					PG_CATCH();
-					{
-						HOLD_INTERRUPTS();
-						FlushErrorState();
-						RESUME_INTERRUPTS();
-					}
-					PG_END_TRY();
 
 					Gp_role = GP_ROLE_DISPATCH;
 
@@ -994,63 +1067,68 @@ calculate_table_disk_usage(bool is_init)
 			}
 
 			/* if schema change, transfer the file size */
-			if (tsentry->namespaceoid != classForm->relnamespace)
+			if (tsentry->namespaceoid != relnamespace)
 			{
 				transfer_table_for_quota(
 						tsentry->totalsize,
 						NAMESPACE_QUOTA,
 						(Oid[]){tsentry->namespaceoid},
-						(Oid[]){classForm->relnamespace},
+						(Oid[]){relnamespace},
 						key.segid);
 				transfer_table_for_quota(
 						tsentry->totalsize,
 						NAMESPACE_TABLESPACE_QUOTA,
 						(Oid[]){tsentry->namespaceoid, tsentry->tablespaceoid},
-						(Oid[]){classForm->relnamespace, tsentry->tablespaceoid},
+						(Oid[]){relnamespace, tsentry->tablespaceoid},
 						key.segid);
-				tsentry->namespaceoid = classForm->relnamespace;
+				tsentry->namespaceoid = relnamespace;
 			}
 			/* if owner change, transfer the file size */
-			if (tsentry->owneroid != classForm->relowner)
+			if (tsentry->owneroid != relowner)
 			{
 				transfer_table_for_quota(
 						tsentry->totalsize,
 						ROLE_QUOTA,
 						(Oid[]){tsentry->owneroid},
-						(Oid[]){classForm->relowner},
+						(Oid[]){relowner},
 						key.segid
 						);
 				transfer_table_for_quota(
 						tsentry->totalsize,
 						ROLE_TABLESPACE_QUOTA,
 						(Oid[]){tsentry->owneroid, tsentry->tablespaceoid},
-						(Oid[]){classForm->relowner, tsentry->tablespaceoid},
+						(Oid[]){relowner, tsentry->tablespaceoid},
 						key.segid
 						);
-				tsentry->owneroid = classForm->relowner;
+				tsentry->owneroid = relowner;
 			}
 
-			if (tsentry->tablespaceoid != classForm->reltablespace)
+			if (tsentry->tablespaceoid != reltablespace)
 			{
 				transfer_table_for_quota(
 						tsentry->totalsize,
 						NAMESPACE_TABLESPACE_QUOTA,
 						(Oid[]){tsentry->namespaceoid, tsentry->tablespaceoid},
-						(Oid[]){tsentry->namespaceoid, classForm->reltablespace},
+						(Oid[]){tsentry->namespaceoid, reltablespace},
 						key.segid
 						);
 				transfer_table_for_quota(
 						tsentry->totalsize,
 						ROLE_TABLESPACE_QUOTA,
 						(Oid[]){tsentry->owneroid, tsentry->tablespaceoid},
-						(Oid[]){tsentry->owneroid, classForm->reltablespace},
+						(Oid[]){tsentry->owneroid, reltablespace},
 						key.segid
 						);
-				tsentry->tablespaceoid = classForm->reltablespace;
+				tsentry->tablespaceoid = reltablespace;
 			}
 		}
-		heap_freetuple(classTup);
+		if (HeapTupleIsValid(classTup))
+		{
+			heap_freetuple(classTup);
+		}
 	}
+
+	list_free(oidlist);
 
 	hash_destroy(local_active_table_stat_map);
 

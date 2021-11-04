@@ -518,15 +518,15 @@ calculate_uncommitted_table_size(Oid relid)
 	Oid subrelid;
 	int i;
 
+	rnode = get_relfilenode_by_relid(relid);
+
 	entry = hash_search(relation_cache, &relid, HASH_FIND, NULL);
 	if (entry == NULL)
 	{
 		return 0;
 	}
 
-	rnode = get_relfilenode_by_relid(relid);
 	tablesize += diskquota_get_relation_size_by_relfilenode(&rnode);
-
 	for (i = 0; i < entry->subrel_num; i++)
 	{
 		subrelid = entry->subrel_oid[i];
@@ -1063,6 +1063,15 @@ pull_active_table_size_from_seg(HTAB *local_table_stats_map, char *active_oid_ar
 static void
 add_subrel_to_relation_cache_entry(DiskQuotaRelationCacheEntry *entry, Oid relid)
 {
+	int i;
+	
+	for (i = 0; i < entry->subrel_num; i++)
+	{
+		if (entry->subrel_oid[i] == relid)
+		{
+			return;
+		}
+	}
 	entry->subrel_oid[entry->subrel_num++] = relid;
 }
 
@@ -1073,7 +1082,11 @@ do_update_relation_cache(Oid relid, DiskQuotaRelationCacheEntry *pentry)
 	Relation rel;
 	DiskQuotaRelationCacheEntry *entry;
 	
-	rel = relation_open(relid, NoLock);
+	rel = diskquota_relation_open(relid, NoLock);
+	if (rel == NULL)
+	{
+		return;
+	}
 
 	entry = hash_search(relation_cache, &relid, HASH_ENTER, &found);
 	if (!found)
@@ -1108,7 +1121,6 @@ update_relation_cache(Oid relid)
 	Relation rel;
 	DiskQuotaRelationCacheEntry *entry;
 	bool found;
-	bool success_open = false;
 	Oid dbid;
 	
 	/* We do not collect the active table in mirror segments  */
@@ -1117,22 +1129,10 @@ update_relation_cache(Oid relid)
 		return;
 	}
 
-	PG_TRY();
+	rel = diskquota_relation_open(relid, NoLock);
+	if (rel == NULL)
 	{
-		rel = relation_open(relid, NoLock);
-		success_open = true;
-	}
-	PG_CATCH();
-	{
-		HOLD_INTERRUPTS();
-		FlushErrorState();
-		RESUME_INTERRUPTS();
-	}
-	PG_END_TRY();
-
-	if (!success_open)
-	{
-		hash_search(relation_cache, &relid, HASH_REMOVE, NULL);
+		// hash_search(relation_cache, &relid, HASH_REMOVE, NULL);
 		return;
 	}
 
@@ -1213,7 +1213,7 @@ compare_relfilenode(RelFileNode *relfile1, RelFileNode *relfile2)
 static bool
 check_table_commit_status(Oid relid)
 {
-	Relation rel = try_relation_open(relid, NoLock, false);
+	Relation rel = diskquota_relation_open(relid, NoLock);
 	if (rel)
 	{
 		relation_close(rel, NoLock);
@@ -1230,7 +1230,7 @@ get_relfilenode_by_relid(Oid relid)
 	RelFileNodeBackend uncommitted_rnode = {0};
 	Relation rel;
 	
-	rel = try_relation_open(relid, AccessShareLock, false);
+	rel = diskquota_relation_open(relid, NoLock);
 	
 	relation_cache_entry = hash_search(relation_cache, &relid, HASH_FIND, NULL);
 	if (relation_cache_entry)
@@ -1242,8 +1242,8 @@ get_relfilenode_by_relid(Oid relid)
 	{
 		rnode.node = rel->rd_node;
 		rnode.backend = rel->rd_backend;
-		relation_close(rel, AccessShareLock);
-		if (!compare_relfilenode(&rnode.node, &uncommitted_rnode.node))
+		relation_close(rel, NoLock);
+		// if (!compare_relfilenode(&rnode.node, &uncommitted_rnode.node))
 		{
 			update_relation_cache(relid);
 		}
@@ -1268,7 +1268,7 @@ get_relid_by_relfilenode(RelFileNode relfilenode)
 	uncommitted_relid = get_uncommitted_table_relid(relfilenode);
 	if(OidIsValid(relid))
 	{
-		if(relid != uncommitted_relid)
+		// if(relid != uncommitted_relid)
 		{
 			update_relation_cache(relid);
 		}
