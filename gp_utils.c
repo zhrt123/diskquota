@@ -11,7 +11,7 @@
  */
 
 #include "postgres.h"
-
+#include "access/heapam.h"
 #include "miscadmin.h"
 #include "fmgr.h"
 
@@ -69,4 +69,25 @@ diskquota_get_relation_size_by_relfilenode(RelFileNodeBackend *rnode)
     }
 
     return totalsize;
+}
+
+Relation
+diskquota_relation_open(Oid relid, LOCKMODE mode)
+{
+	Relation rel;
+	bool success_open = false;
+
+	PG_TRY();
+	{
+		rel = relation_open(relid, mode);
+		success_open = true;
+	}
+	PG_CATCH();
+	{
+		HOLD_INTERRUPTS();
+		FlushErrorState();
+		RESUME_INTERRUPTS();
+	}
+	PG_END_TRY();
+	return success_open ? rel : NULL;
 }
