@@ -1040,7 +1040,9 @@ calculate_table_disk_usage(bool is_init)
 					/* pretend process as utility mode, and append the table size on master */
 					Gp_role = GP_ROLE_UTILITY;
 
+					LWLockAcquire(diskquota_locks.relation_cache_lock, LW_EXCLUSIVE);
 					active_table_entry->tablesize += calculate_table_size(relOid);
+					LWLockRelease(diskquota_locks.relation_cache_lock);
 					/* DirectFunctionCall1 may fail, since table maybe dropped by other backend */
 
 					Gp_role = GP_ROLE_DISPATCH;
