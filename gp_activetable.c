@@ -172,7 +172,7 @@ active_table_hook_smgrextend(RelFileNodeBackend rnode)
 
 	if (OidIsValid(relid))
 	{
-		// quota_check_common(relid);
+		quota_check_common(relid);
 
 		LWLockAcquire(diskquota_locks.relation_cache_lock, LW_EXCLUSIVE);
 		update_relation_cache(relid);
