@@ -76,6 +76,7 @@ diskquota_relation_open(Oid relid, LOCKMODE mode)
 {
 	Relation rel;
 	bool success_open = false;
+    int32 SavedInterruptHoldoffCount = InterruptHoldoffCount;
 
 	PG_TRY();
 	{
@@ -84,6 +85,7 @@ diskquota_relation_open(Oid relid, LOCKMODE mode)
 	}
 	PG_CATCH();
 	{
+        InterruptHoldoffCount = SavedInterruptHoldoffCount;
 		HOLD_INTERRUPTS();
 		FlushErrorState();
 		RESUME_INTERRUPTS();

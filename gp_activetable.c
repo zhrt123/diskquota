@@ -489,6 +489,8 @@ static Size
 calculate_committed_table_size(Oid relid)
 {
 	Size tablesize = 0;
+	int32 SavedInterruptHoldoffCount = InterruptHoldoffCount;
+
 	/*
 	* avoid to generate ERROR if relOid is not existed (i.e. table
 	* has been droped)
@@ -500,6 +502,7 @@ calculate_committed_table_size(Oid relid)
 	}
 	PG_CATCH();
 	{
+		InterruptHoldoffCount = SavedInterruptHoldoffCount;
 		HOLD_INTERRUPTS();
 		FlushErrorState();
 		RESUME_INTERRUPTS();
