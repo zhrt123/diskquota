@@ -89,6 +89,8 @@ static RelFileNodeBackend get_relfilenode_by_relid(Oid relid);
 static Oid get_relid_by_relfilenode(RelFileNode relfilenode);
 static void update_relation_cache(Oid relid);
 static Oid get_uncommitted_table_relid(RelFileNode relfilenode);
+static Oid get_primary_table_oid(Oid relid);
+static Size calculate_uncommitted_table_size(Oid relid);
 /*
  * Init active_tables_map shared memory
  */
@@ -172,7 +174,11 @@ active_table_hook_smgrextend(RelFileNodeBackend rnode)
 
 	if (OidIsValid(relid))
 	{
-		quota_check_common(relid);
+		Oid primary_table_oid = get_primary_table_oid(relid);
+		if (OidIsValid(primary_table_oid))
+		{
+			quota_check_common(primary_table_oid);
+		}
 
 		LWLockAcquire(diskquota_locks.relation_cache_lock, LW_EXCLUSIVE);
 		update_relation_cache(relid);
@@ -489,8 +495,16 @@ static Size
 calculate_committed_table_size(Oid relid)
 {
 	Size tablesize = 0;
-	int32 SavedInterruptHoldoffCount = InterruptHoldoffCount;
+	int32 SavedInterruptHoldoffCount;
+	
+	Relation rel = diskquota_relation_open(relid, NoLock);
+	if (RelationIsAppendOptimized(rel))
+	{
+		relation_close(rel, NoLock);
+		return calculate_uncommitted_table_size(relid);
+	}
 
+	SavedInterruptHoldoffCount = InterruptHoldoffCount;
 	/*
 	* avoid to generate ERROR if relOid is not existed (i.e. table
 	* has been droped)
@@ -1096,8 +1110,12 @@ do_update_relation_cache(Oid relid, DiskQuotaRelationCacheEntry *pentry)
 	{
 		memset(entry, 0, sizeof(DiskQuotaRelationCacheEntry));
 		entry->relid = relid;
+		entry->rnode.node = rel->rd_node;
+		entry->rnode.backend = rel->rd_backend;
+		entry->owneroid = rel->rd_rel->relowner;
+		entry->namespaceoid = rel->rd_rel->relnamespace;
 	}
-	
+
 	entry->primary_table_relid = pentry->relid;
 	add_subrel_to_relation_cache_entry(pentry, relid);
 
@@ -1296,4 +1314,15 @@ get_uncommitted_table_relid(RelFileNode relfilenode)
 		}
 	}
 	return relid;
+}
+
+static Oid
+get_primary_table_oid(Oid relid)
+{
+	DiskQuotaRelationCacheEntry *entry = hash_search(relation_cache, &relid, HASH_FIND, NULL);
+	if (entry)
+	{
+		return entry->primary_table_relid;
+	}
+	return InvalidOid;
 }
