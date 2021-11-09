@@ -56,6 +56,7 @@ typedef struct DiskQuotaSetOFCache
 HTAB	   *active_tables_map = NULL;
 HTAB	   *monitoring_dbid_cache = NULL;
 HTAB	   *relation_cache = NULL;
+HTAB	   *relid_cache = NULL;
 
 /* active table hooks which detect the disk file size change. */
 static file_create_hook_type prev_file_create_hook = NULL;
@@ -117,6 +118,18 @@ init_shm_worker_active_tables(void)
 	ctl.hash = tag_hash;
 
 	relation_cache = ShmemInitHash("relation_cache",
+									  diskquota_max_active_tables,
+									  diskquota_max_active_tables,
+									  &ctl,
+									  HASH_ELEM | HASH_FUNCTION);
+	
+	memset(&ctl, 0, sizeof(ctl));
+
+	ctl.keysize = sizeof(Oid);
+	ctl.entrysize = sizeof(DIskQuotaRelidCacheEntry);
+	ctl.hash = tag_hash;
+
+	relid_cache = ShmemInitHash("relid_cache",
 									  diskquota_max_active_tables,
 									  diskquota_max_active_tables,
 									  &ctl,
@@ -208,6 +221,7 @@ static void active_table_hook_smgrunlink(RelFileNodeBackend rnode)
 	LWLockAcquire(diskquota_locks.relation_cache_lock, LW_EXCLUSIVE);
 	Oid relid = get_uncommitted_table_relid(rnode.node);
 	hash_search(relation_cache, &relid, HASH_REMOVE, NULL);
+	hash_search(relid_cache, &rnode.node.relNode, HASH_REMOVE, NULL);
 	LWLockRelease(diskquota_locks.relation_cache_lock);
 }
 
@@ -1098,6 +1112,7 @@ do_update_relation_cache(Oid relid, DiskQuotaRelationCacheEntry *pentry)
 	bool found;
 	Relation rel;
 	DiskQuotaRelationCacheEntry *entry;
+	DIskQuotaRelidCacheEntry *relid_entry;
 	
 	rel = diskquota_relation_open(relid, NoLock);
 	if (rel == NULL)
@@ -1110,11 +1125,18 @@ do_update_relation_cache(Oid relid, DiskQuotaRelationCacheEntry *pentry)
 	{
 		memset(entry, 0, sizeof(DiskQuotaRelationCacheEntry));
 		entry->relid = relid;
-		entry->rnode.node = rel->rd_node;
-		entry->rnode.backend = rel->rd_backend;
-		entry->owneroid = rel->rd_rel->relowner;
-		entry->namespaceoid = rel->rd_rel->relnamespace;
 	}
+	entry->rnode.node = rel->rd_node;
+	entry->rnode.backend = rel->rd_backend;
+	entry->owneroid = rel->rd_rel->relowner;
+	entry->namespaceoid = rel->rd_rel->relnamespace;
+
+	relid_entry = hash_search(relid_cache, &rel->rd_node.relNode, HASH_ENTER, &found);
+	if (!found)
+	{
+		relid_entry->relfilenode = rel->rd_node.relNode;
+	}
+	relid_entry->relid = relid;
 
 	entry->primary_table_relid = pentry->relid;
 	add_subrel_to_relation_cache_entry(pentry, relid);
@@ -1141,6 +1163,7 @@ update_relation_cache(Oid relid)
 {
 	Relation rel;
 	DiskQuotaRelationCacheEntry *entry;
+	DIskQuotaRelidCacheEntry *relid_entry;
 	bool found;
 	Oid dbid;
 	
@@ -1175,11 +1198,17 @@ update_relation_cache(Oid relid)
 		memset(entry, 0, sizeof(DiskQuotaRelationCacheEntry));
 		entry->relid = relid;
 	}
-
 	entry->rnode.node = rel->rd_node;
 	entry->rnode.backend = rel->rd_backend;
 	entry->owneroid = rel->rd_rel->relowner;
 	entry->namespaceoid = rel->rd_rel->relnamespace;
+
+	relid_entry = hash_search(relid_cache, &rel->rd_node.relNode, HASH_ENTER, &found);
+	if (!found)
+	{
+		relid_entry->relfilenode = rel->rd_node.relNode;
+	}
+	relid_entry->relid = relid;
 
 	if (rel->rd_rel->relkind == 'i' && (rel->rd_rel->relnamespace != PG_AOSEGMENT_NAMESPACE 
 									|| rel->rd_rel->relnamespace != PG_TOAST_NAMESPACE 
@@ -1302,16 +1331,10 @@ static Oid
 get_uncommitted_table_relid(RelFileNode relfilenode)
 {
 	Oid relid = InvalidOid;
-	HASH_SEQ_STATUS iter;
-	DiskQuotaRelationCacheEntry *relation_cache_entry;
-
-	hash_seq_init(&iter, relation_cache);
-	while ((relation_cache_entry = hash_seq_search(&iter)) != NULL)
+	DIskQuotaRelidCacheEntry *entry = hash_search(relid_cache, &relfilenode.relNode, HASH_FIND, NULL);
+	if (entry)
 	{
-		if(compare_relfilenode(&relation_cache_entry->rnode.node, &relfilenode))
-		{
-			relid = relation_cache_entry->relid;
-		}
+		relid = entry->relid;
 	}
 	return relid;
 }

@@ -36,6 +36,12 @@ typedef struct DiskQuotaRelationCacheEntry
 	RelFileNodeBackend	rnode;
 }		DiskQuotaRelationCacheEntry;
 
+typedef struct DIskQuotaRelidCacheEntry
+{
+	Oid			 		relfilenode;
+	Oid					relid;
+}		DIskQuotaRelidCacheEntry;
+
 extern HTAB *gp_fetch_active_tables(bool force);
 extern void init_active_table_hook(void);
 extern void init_shm_worker_active_tables(void);
