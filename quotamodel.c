@@ -1237,10 +1237,10 @@ flush_to_table_size(void)
 	switch (extMajorVersion)
 	{
 		case 1:
-			appendStringInfo(&delete_statement, "delete from diskquota.table_size where tableid in ( ");
+			appendStringInfo(&delete_statement, "delete from diskquota.table_size where tableid in (values ");
 			break;
 		case 2:
-			appendStringInfo(&delete_statement, "delete from diskquota.table_size where (tableid, segid) in ( ");
+			appendStringInfo(&delete_statement, "delete from diskquota.table_size where (tableid, segid) in (values ");
 			break;
 		default:
 			ereport(ERROR,
