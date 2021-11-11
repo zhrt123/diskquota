@@ -517,6 +517,7 @@ calculate_committed_table_size(Oid relid)
 		relation_close(rel, NoLock);
 		return calculate_uncommitted_table_size(relid);
 	}
+	relation_close(rel, NoLock);
 
 	SavedInterruptHoldoffCount = InterruptHoldoffCount;
 	/*
