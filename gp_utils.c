@@ -35,38 +35,44 @@ diskquota_get_relation_size_by_relfilenode(RelFileNodeBackend *rnode)
     char        pathname[MAXPGPATH];
     unsigned int segcount = 0;
 
-    for (forkNum = 0; forkNum <= MAX_FORKNUM; forkNum++)
-    {
-        relationpath = relpathbackend(rnode->node, rnode->backend, forkNum);
-        size = 0;
-
-        for (segcount = 0;; segcount++)
+    PG_TRY();
+	{
+        for (forkNum = 0; forkNum <= MAX_FORKNUM; forkNum++)
         {
-            struct stat fst;
+            relationpath = relpathbackend(rnode->node, rnode->backend, forkNum);
+            size = 0;
 
-            CHECK_FOR_INTERRUPTS();
-
-            if (segcount == 0)
-                snprintf(pathname, MAXPGPATH, "%s",
-                         relationpath);
-            else
-                snprintf(pathname, MAXPGPATH, "%s.%u",
-                         relationpath, segcount);
-
-            if (stat(pathname, &fst) < 0)
+            for (segcount = 0;; segcount++)
             {
-                if (errno == ENOENT)
-                    break;
-                else
-                    ereport(ERROR,
-                            (errcode_for_file_access(),
-                                errmsg("could not stat file \"%s\": %m", pathname)));
-            }
-            size += fst.st_size;
-        }
+                struct stat fst;
 
-        totalsize += size;
+                CHECK_FOR_INTERRUPTS();
+
+                if (segcount == 0)
+                    snprintf(pathname, MAXPGPATH, "%s",
+                            relationpath);
+                else
+                    snprintf(pathname, MAXPGPATH, "%s.%u",
+                            relationpath, segcount);
+
+                if (stat(pathname, &fst) < 0)
+                {
+                    if (errno == ENOENT)
+                        break;
+                }
+                size += fst.st_size;
+            }
+
+            totalsize += size;
+        }
     }
+	PG_CATCH();
+	{
+		HOLD_INTERRUPTS();
+		FlushErrorState();
+		RESUME_INTERRUPTS();
+	}
+	PG_END_TRY();
 
     return totalsize;
 }
