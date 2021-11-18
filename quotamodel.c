@@ -51,6 +51,7 @@
 
 #include "gp_activetable.h"
 #include "diskquota.h"
+#include "relation_cache.h"
 
 /* cluster level max size of black list */
 #define MAX_DISK_QUOTA_BLACK_ENTRIES (1024 * 1024)
@@ -544,6 +545,8 @@ disk_quota_shmem_startup(void)
 
 	init_shm_worker_active_tables();
 
+	init_shm_worker_relation_cache();
+
 	memset(&hash_ctl, 0, sizeof(hash_ctl));
 	hash_ctl.keysize = sizeof(Oid);
 	hash_ctl.entrysize = sizeof(Oid);
@@ -599,7 +602,7 @@ DiskQuotaShmemSize(void)
 	size = add_size(size, hash_estimate_size(MAX_DISK_QUOTA_BLACK_ENTRIES, sizeof(GlobalBlackMapEntry)));
 	size = add_size(size, hash_estimate_size(diskquota_max_active_tables, sizeof(DiskQuotaActiveTableEntry)));
 	size = add_size(size, hash_estimate_size(diskquota_max_active_tables, sizeof(DiskQuotaRelationCacheEntry)));
-	size = add_size(size, hash_estimate_size(diskquota_max_active_tables, sizeof(DIskQuotaRelidCacheEntry)));
+	size = add_size(size, hash_estimate_size(diskquota_max_active_tables, sizeof(DiskQuotaRelidCacheEntry)));
 	size = add_size(size, hash_estimate_size(MAX_NUM_MONITORED_DB, sizeof(Oid)));
 	size += sizeof(bool); /* sizeof(*diskquota_paused) */
 	return size;
@@ -861,32 +864,23 @@ refresh_disk_quota_usage(bool is_init)
 static List*
 merge_uncommitted_table_to_oidlist(List *oidlist)
 {
-	HTAB	   		   			*local_oid_cache = NULL;
-	HASHCTL						 ctl;
 	HASH_SEQ_STATUS 			 iter;
 	Oid							 relid;
 	ListCell   		   			*l;
 	DiskQuotaRelationCacheEntry *entry;
-	DiskQuotaRelationCacheEntry *local_entry;
-	bool found;
 
 	if (relation_cache == NULL)
 	{
 		return oidlist;
 	}
 
-	memset(&ctl, 0, sizeof(ctl));
-	ctl.keysize = sizeof(Oid);
-	ctl.entrysize = sizeof(DiskQuotaRelationCacheEntry);
-	ctl.hcxt = CurrentMemoryContext;
-	ctl.hash = tag_hash;
+	LWLockAcquire(diskquota_locks.relation_cache_lock, LW_EXCLUSIVE);
+	foreach(l, oidlist)
+	{
+		relid = lfirst_oid(l);
+		remove_cache_entry_recursion_wio_lock(relid);
+	}
 
-	local_oid_cache = hash_create("local relation cache",
-										1024,
-										&ctl,
-										HASH_ELEM | HASH_CONTEXT | HASH_FUNCTION);
-
-	LWLockAcquire(diskquota_locks.relation_cache_lock, LW_SHARED);
 	hash_seq_init(&iter, relation_cache);
 	while ((entry = hash_seq_search(&iter)) != NULL)
 	{
@@ -894,28 +888,9 @@ merge_uncommitted_table_to_oidlist(List *oidlist)
 		{
 			continue;
 		}
-		local_entry = hash_search(local_oid_cache, &entry->relid, HASH_ENTER_NULL, &found);
-		if (!found && local_entry)
-		{
-			local_entry->relid = entry->relid;
-		}
+		oidlist = lappend_oid(oidlist, entry->relid);
 	}
 	LWLockRelease(diskquota_locks.relation_cache_lock);
-
-	foreach(l, oidlist)
-	{
-		relid = lfirst_oid(l);
-		hash_search(local_oid_cache, &relid, HASH_REMOVE, NULL);
-	}
-	
-	/* unmonitored table maybe in relation_cache */
-	hash_seq_init(&iter, local_oid_cache);
-	while ((local_entry = hash_seq_search(&iter)) != NULL)
-	{
-		oidlist = lappend_oid(oidlist, local_entry->relid);
-	}
-
-	hash_destroy(local_oid_cache);
 
 	return oidlist;
 }
@@ -1041,10 +1016,7 @@ calculate_table_disk_usage(bool is_init)
 					/* pretend process as utility mode, and append the table size on master */
 					Gp_role = GP_ROLE_UTILITY;
 
-					LWLockAcquire(diskquota_locks.relation_cache_lock, LW_EXCLUSIVE);
 					active_table_entry->tablesize += calculate_table_size(relOid);
-					LWLockRelease(diskquota_locks.relation_cache_lock);
-					/* DirectFunctionCall1 may fail, since table maybe dropped by other backend */
 
 					Gp_role = GP_ROLE_DISPATCH;
 
@@ -1274,6 +1246,8 @@ flush_to_table_size(void)
 			hash_search(table_size_map,
 						&tsentry->reloid,
 						HASH_REMOVE, NULL);
+
+			remove_cache_entry(tsentry->reloid, InvalidOid);
 		}
 		/* update the table size by delete+insert in table table_size */
 		else if (tsentry->need_flush == true)

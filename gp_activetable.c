@@ -43,6 +43,7 @@
 #include "gp_utils.h"
 #include "gp_activetable.h"
 #include "diskquota.h"
+#include "relation_cache.h"
 
 PG_FUNCTION_INFO_V1(diskquota_fetch_table_stat);
 
@@ -55,8 +56,6 @@ typedef struct DiskQuotaSetOFCache
 
 HTAB	   *active_tables_map = NULL;
 HTAB	   *monitoring_dbid_cache = NULL;
-HTAB	   *relation_cache = NULL;
-HTAB	   *relid_cache = NULL;
 
 /* active table hooks which detect the disk file size change. */
 static file_create_hook_type prev_file_create_hook = NULL;
@@ -78,21 +77,13 @@ static void pull_active_table_size_from_seg(HTAB *local_table_stats_map, char *a
 static StringInfoData convert_map_to_string(HTAB *active_list);
 static void load_table_size(HTAB *local_table_stats_map);
 static void report_active_table_helper(const RelFileNodeBackend *relFileNode);
+static void report_relation_cache_helper(Oid relid, RelFileNodeBackend *rnode);
 
 void		init_active_table_hook(void);
 void		init_shm_worker_active_tables(void);
 void		init_lock_active_tables(void);
 HTAB	   *gp_fetch_active_tables(bool is_init);
-Size 		calculate_table_size(Oid relid);
 
-static bool check_table_commit_status(Oid relid);
-static RelFileNodeBackend get_relfilenode_by_relid(Oid relid);
-static Oid get_relid_by_relfilenode(RelFileNode relfilenode);
-static void update_relation_cache(Oid relid);
-static Oid get_uncommitted_table_relid(RelFileNode relfilenode);
-static Oid get_primary_table_oid(Oid relid);
-static Size calculate_uncommitted_table_size(Oid relid);
-static void remove_cache_entry(Oid relid, Oid relfilenode);
 /*
  * Init active_tables_map shared memory
  */
@@ -108,29 +99,6 @@ init_shm_worker_active_tables(void)
 	ctl.hash = tag_hash;
 
 	active_tables_map = ShmemInitHash("active_tables",
-									  diskquota_max_active_tables,
-									  diskquota_max_active_tables,
-									  &ctl,
-									  HASH_ELEM | HASH_FUNCTION);
-	memset(&ctl, 0, sizeof(ctl));
-
-	ctl.keysize = sizeof(Oid);
-	ctl.entrysize = sizeof(DiskQuotaRelationCacheEntry);
-	ctl.hash = tag_hash;
-
-	relation_cache = ShmemInitHash("relation_cache",
-									  diskquota_max_active_tables,
-									  diskquota_max_active_tables,
-									  &ctl,
-									  HASH_ELEM | HASH_FUNCTION);
-	
-	memset(&ctl, 0, sizeof(ctl));
-
-	ctl.keysize = sizeof(Oid);
-	ctl.entrysize = sizeof(DIskQuotaRelidCacheEntry);
-	ctl.hash = tag_hash;
-
-	relid_cache = ShmemInitHash("relid_cache",
 									  diskquota_max_active_tables,
 									  diskquota_max_active_tables,
 									  &ctl,
@@ -182,22 +150,14 @@ active_table_hook_smgrextend(RelFileNodeBackend rnode)
 	if (prev_file_extend_hook)
 		(*prev_file_extend_hook) (rnode);
 
-	LWLockAcquire(diskquota_locks.relation_cache_lock, LW_SHARED);
-	Oid relid = get_uncommitted_table_relid(rnode.node);
-	Oid primary_table_oid = get_primary_table_oid(relid);
-	LWLockRelease(diskquota_locks.relation_cache_lock);
 
-	if (OidIsValid(primary_table_oid))
-	{
-		quota_check_common(primary_table_oid);
-	}
+	/* check common by relfilenode */
+	// if (OidIsValid(primary_table_oid))
+	// {
+	// 	quota_check_common(primary_table_oid);
+	// }
 
-	if (OidIsValid(relid))
-	{
-		LWLockAcquire(diskquota_locks.relation_cache_lock, LW_EXCLUSIVE);
-		update_relation_cache(relid);
-		LWLockRelease(diskquota_locks.relation_cache_lock);
-	}
+	report_relation_cache_helper(InvalidOid, &rnode);
 
 	report_active_table_helper(&rnode);
 }
@@ -219,10 +179,7 @@ static void active_table_hook_smgrunlink(RelFileNodeBackend rnode)
 	if (prev_file_unlink_hook)
 		(*prev_file_unlink_hook) (rnode);
 
-	LWLockAcquire(diskquota_locks.relation_cache_lock, LW_EXCLUSIVE);
-	Oid relid = get_uncommitted_table_relid(rnode.node);
-	remove_cache_entry(relid, rnode.node.relNode);
-	LWLockRelease(diskquota_locks.relation_cache_lock);
+	remove_cache_entry(InvalidOid, rnode.node.relNode);
 }
 
 static void object_access_hook_QuotaStmt(ObjectAccessType access, Oid classId, Oid objectId, int subId, void *arg)
@@ -246,16 +203,55 @@ static void object_access_hook_QuotaStmt(ObjectAccessType access, Oid classId, O
 		return;
 	}
 
-	// check whether quota limit is reached
-	// quota_check_common(objectId);
+	report_relation_cache_helper(objectId, NULL);
+}
 
-	/* 1. CREATE/ALTER TALBE: update relfilenode/namespace/owner
-	 * 2. ALTER TABLE: update relation between primary table and toast/ao table
-	 */
-	bool is_internal = access == OAT_POST_ALTER ? ((ObjectAccessPostAlter*)arg)->is_internal : ((ObjectAccessPostCreate*)arg)->is_internal;
-	LWLockAcquire(diskquota_locks.relation_cache_lock, LW_EXCLUSIVE);
-	update_relation_cache(objectId);
-	LWLockRelease(diskquota_locks.relation_cache_lock);
+static void
+report_relation_cache_helper(Oid relid, RelFileNodeBackend* rnode)
+{
+	Relation rel;
+	bool found;
+	Oid dbid;
+	
+	/* We do not collect the active table in mirror segments  */
+	if (IsRoleMirror())
+	{
+		return;
+	}
+
+	if (OidIsValid(relid))
+	{
+		// skip committed table
+		if (get_table_commit_status(relid) == true)
+		{
+			return;
+		}
+		
+		rel = diskquota_relation_open(relid, NoLock);
+		dbid = rel->rd_node.dbNode;
+		relation_close(rel, NoLock);
+	}
+	else
+	{
+		// skip committed table or inexistent table
+		relid = get_uncommitted_table_relid(rnode->node.relNode);
+		if (!OidIsValid(relid) || get_table_commit_status(relid) == true)
+		{
+			return;
+		}
+		dbid = rnode->node.dbNode;
+	}
+
+	/* do not collect active table info when the database is not under monitoring.
+	 * this operation is read-only and does not require absolutely exact.
+	 * read the cache with out shared lock */
+	hash_search(monitoring_dbid_cache, &dbid, HASH_FIND, &found);
+	if (!found)
+	{
+		return;
+	}
+
+	update_relation_cache(relid);
 }
 
 /*
@@ -502,80 +498,6 @@ diskquota_fetch_table_stat(PG_FUNCTION_ARGS)
 	SRF_RETURN_DONE(funcctx);
 }
 
-static Size
-calculate_committed_table_size(Oid relid)
-{
-	Size tablesize = 0;
-	int32 SavedInterruptHoldoffCount;
-	
-	Relation rel = diskquota_relation_open(relid, NoLock);
-	if (RelationIsAppendOptimized(rel))
-	{
-		relation_close(rel, NoLock);
-		return calculate_uncommitted_table_size(relid);
-	}
-	relation_close(rel, NoLock);
-
-	SavedInterruptHoldoffCount = InterruptHoldoffCount;
-	/*
-	* avoid to generate ERROR if relOid is not existed (i.e. table
-	* has been droped)
-	*/
-	PG_TRY();
-	{
-		/* call pg_table_size to get the active table size */
-		tablesize = (Size) DatumGetInt64(DirectFunctionCall1(pg_table_size, ObjectIdGetDatum(relid)));
-	}
-	PG_CATCH();
-	{
-		InterruptHoldoffCount = SavedInterruptHoldoffCount;
-		HOLD_INTERRUPTS();
-		FlushErrorState();
-		RESUME_INTERRUPTS();
-		tablesize = 0;
-	}
-	PG_END_TRY();
-	return tablesize;
-}
-
-static Size
-calculate_uncommitted_table_size(Oid relid)
-{
-	Size tablesize = 0;
-	DiskQuotaRelationCacheEntry *entry;
-	RelFileNodeBackend rnode;
-	Oid subrelid;
-	int i;
-
-	rnode = get_relfilenode_by_relid(relid);
-
-	entry = hash_search(relation_cache, &relid, HASH_FIND, NULL);
-	if (entry == NULL)
-	{
-		return 0;
-	}
-
-	tablesize += diskquota_get_relation_size_by_relfilenode(&rnode);
-	for (i = 0; i < entry->subrel_num; i++)
-	{
-		subrelid = entry->subrel_oid[i];
-		rnode = get_relfilenode_by_relid(subrelid);
-		tablesize += diskquota_get_relation_size_by_relfilenode(&rnode);
-	}
-	return tablesize;
-}
-
-Size
-calculate_table_size(Oid relid)
-{
-	bool committed = check_table_commit_status(relid);
-	if (committed)
-	{
-		return calculate_committed_table_size(relid);
-	}
-	return calculate_uncommitted_table_size(relid);
-}
-
 /*
  * Call pg_table_size to calcualte the
  * active table size on each segments.
@@ -599,7 +521,6 @@ get_active_tables_stats(ArrayType *array)
 	HASHCTL		ctl;
 	TableEntryKey key;
 	DiskQuotaActiveTableEntry *entry;
-	DiskQuotaRelationCacheEntry *relation_entry;
 	bool		found;
 
 	Assert(ARR_ELEMTYPE(array) == OIDOID);
@@ -625,8 +546,6 @@ get_active_tables_stats(ArrayType *array)
 							  &ctl,
 							  HASH_ELEM | HASH_CONTEXT | HASH_FUNCTION);
 
-	LWLockAcquire(diskquota_locks.relation_cache_lock, LW_EXCLUSIVE);
-
 	for (i = 0; i < nitems; i++)
 	{
 		/*
@@ -642,10 +561,10 @@ get_active_tables_stats(ArrayType *array)
 			relOid = DatumGetObjectId(fetch_att(ptr, typbyval, typlen));
 			segId = GpIdentity.segindex;
 
-			relation_entry = hash_search(relation_cache, &relOid, HASH_FIND, &found);
-			if (found && OidIsValid(relation_entry->primary_table_relid))
+			Oid primary_table_oid = get_primary_table_oid(relOid);
+			if (OidIsValid(primary_table_oid))
 			{
-				relOid = relation_entry->primary_table_relid;
+				relOid = primary_table_oid;
 			}
 
 			key.reloid = relOid;
@@ -675,7 +594,6 @@ get_active_tables_stats(ArrayType *array)
 			}
 		}
 	}
-	LWLockRelease(diskquota_locks.relation_cache_lock);
 
 	return local_table;
 }
@@ -751,7 +669,6 @@ get_active_tables_oid(void)
 	 * of them
 	 */
 	hash_seq_init(&iter, local_active_table_file_map);
-	LWLockAcquire(diskquota_locks.relation_cache_lock, LW_EXCLUSIVE);
 
 	while ((active_table_file_entry = (DiskQuotaActiveTableFileEntry *) hash_seq_search(&iter)) != NULL)
 	{
@@ -777,8 +694,6 @@ get_active_tables_oid(void)
 			hash_search(local_active_table_file_map, active_table_file_entry, HASH_REMOVE, NULL);
 		}
 	}
-
-	LWLockRelease(diskquota_locks.relation_cache_lock);
 
 	/*
 	 * If cannot convert relfilenode to relOid, put them back to shared memory
@@ -1087,280 +1002,4 @@ pull_active_table_size_from_seg(HTAB *local_table_stats_map, char *active_oid_ar
 	}
 	cdbdisp_clearCdbPgResults(&cdb_pgresults);
 	return;
-}
-
-static void
-add_subrel_to_relation_cache_entry(DiskQuotaRelationCacheEntry *entry, Oid relid)
-{
-	int i;
-	
-	for (i = 0; i < entry->subrel_num; i++)
-	{
-		if (entry->subrel_oid[i] == relid)
-		{
-			return;
-		}
-	}
-	entry->subrel_oid[entry->subrel_num++] = relid;
-}
-
-static void
-do_update_relation_cache(Oid relid, DiskQuotaRelationCacheEntry *pentry)
-{
-	bool found;
-	Relation rel;
-	DiskQuotaRelationCacheEntry *entry;
-	DIskQuotaRelidCacheEntry *relid_entry;
-	
-	rel = diskquota_relation_open(relid, NoLock);
-	if (rel == NULL)
-	{
-		return;
-	}
-
-	entry = hash_search(relation_cache, &relid, HASH_ENTER, &found);
-	if (!found)
-	{
-		memset(entry, 0, sizeof(DiskQuotaRelationCacheEntry));
-		entry->relid = relid;
-	}
-	entry->rnode.node = rel->rd_node;
-	entry->rnode.backend = rel->rd_backend;
-	entry->owneroid = rel->rd_rel->relowner;
-	entry->namespaceoid = rel->rd_rel->relnamespace;
-
-	relid_entry = hash_search(relid_cache, &rel->rd_node.relNode, HASH_ENTER, &found);
-	if (!found)
-	{
-		relid_entry->relfilenode = rel->rd_node.relNode;
-	}
-	relid_entry->relid = relid;
-
-	entry->primary_table_relid = pentry->relid;
-	add_subrel_to_relation_cache_entry(pentry, relid);
-
-	if (rel->rd_rel && rel->rd_rel->relhasindex)
-	{
-		List	   *index_oids = RelationGetIndexList(rel);
-		ListCell   *cell;
-
-		foreach(cell, index_oids)
-		{
-			Oid	idxOid = lfirst_oid(cell);
-			do_update_relation_cache(idxOid, pentry);
-		}
-
-		list_free(index_oids);
-	}
-
-	relation_close(rel, NoLock);
-}
-
-static void
-update_relation_cache(Oid relid)
-{
-	Relation rel;
-	DiskQuotaRelationCacheEntry *entry;
-	DIskQuotaRelidCacheEntry *relid_entry;
-	bool found;
-	Oid dbid;
-	
-	/* We do not collect the active table in mirror segments  */
-	if (IsRoleMirror())
-	{
-		return;
-	}
-
-	rel = diskquota_relation_open(relid, NoLock);
-	if (rel == NULL)
-	{
-		// hash_search(relation_cache, &relid, HASH_REMOVE, NULL);
-		return;
-	}
-
-	/* do not collect active table info when the database is not under monitoring.
-	 * this operation is read-only and does not require absolutely exact.
-	 * read the cache with out shared lock */
-	dbid = rel->rd_node.dbNode;
-	hash_search(monitoring_dbid_cache, &dbid, HASH_FIND, &found);
-
-	if (!found)
-	{
-		relation_close(rel, NoLock);
-		return;
-	}
-
-	entry = hash_search(relation_cache, &relid, HASH_ENTER, &found);
-	if (!found)
-	{
-		memset(entry, 0, sizeof(DiskQuotaRelationCacheEntry));
-		entry->relid = relid;
-	}
-	entry->rnode.node = rel->rd_node;
-	entry->rnode.backend = rel->rd_backend;
-	entry->owneroid = rel->rd_rel->relowner;
-	entry->namespaceoid = rel->rd_rel->relnamespace;
-
-	relid_entry = hash_search(relid_cache, &rel->rd_node.relNode, HASH_ENTER, &found);
-	if (!found)
-	{
-		relid_entry->relfilenode = rel->rd_node.relNode;
-	}
-	relid_entry->relid = relid;
-
-	if (rel->rd_rel->relkind == 'i' && (rel->rd_rel->relnamespace != PG_AOSEGMENT_NAMESPACE 
-									|| rel->rd_rel->relnamespace != PG_TOAST_NAMESPACE 
-									|| rel->rd_rel->relnamespace != PG_AOSEGMENT_NAMESPACE
-									|| rel->rd_rel->relnamespace != PG_BITMAPINDEX_NAMESPACE))
-	{
-		entry->primary_table_relid = relid;
-	}
-
-	if (rel->rd_rel->relkind == 'r' || rel->rd_rel->relkind == 'm')
-	{
-		entry->primary_table_relid = relid;
-
-		// toast table
-		if (OidIsValid(rel->rd_rel->reltoastrelid))
-		{
-			do_update_relation_cache(rel->rd_rel->reltoastrelid, entry);
-		}
-
-		// ao table
-		if (RelationIsAppendOptimized(rel) && rel->rd_appendonly != NULL && entry->subrel_num == 0)
-		{
-			if (OidIsValid(rel->rd_appendonly->segrelid))
-			{
-				do_update_relation_cache(rel->rd_appendonly->segrelid, entry);
-			}
-
-			/* block directory may not exist, post upgrade or new table that never has indexes */
-			if (OidIsValid(rel->rd_appendonly->blkdirrelid))
-			{
-				do_update_relation_cache(rel->rd_appendonly->blkdirrelid, entry);
-			}
-			if (OidIsValid(rel->rd_appendonly->visimaprelid))
-			{
-				do_update_relation_cache(rel->rd_appendonly->visimaprelid, entry);
-			}
-		}
-	}
-
-	relation_close(rel, NoLock);
-}
-
-static bool
-check_table_commit_status(Oid relid)
-{
-	Relation rel = diskquota_relation_open(relid, NoLock);
-	if (rel)
-	{
-		relation_close(rel, NoLock);
-		return true;
-	}
-	return false;
-}
-
-static void
-remove_cache_entry(Oid relid, Oid relfilenode)
-{
-	if (OidIsValid(relid))
-	{
-		DiskQuotaRelationCacheEntry *relation_entry = hash_search(relation_cache, &relid, HASH_FIND, NULL);
-		if (relation_entry)
-		{
-			hash_search(relid_cache, &relation_entry->rnode.node.relNode, HASH_REMOVE, NULL);
-			hash_search(relation_cache, &relid, HASH_REMOVE, NULL);
-		}
-	}
-
-	if (OidIsValid(relfilenode))
-	{
-		DIskQuotaRelidCacheEntry *relid_entry = hash_search(relid_cache, &relfilenode, HASH_FIND, NULL);
-		if (relid_entry)
-		{
-			hash_search(relation_cache, &relid_entry->relid, HASH_REMOVE, NULL);
-			hash_search(relid_cache, &relfilenode, HASH_REMOVE, NULL);
-		}
-	}
-}
-
-static RelFileNodeBackend
-get_relfilenode_by_relid(Oid relid)
-{
-	DiskQuotaRelationCacheEntry *relation_cache_entry;
-	RelFileNodeBackend rnode = {0};
-	RelFileNodeBackend uncommitted_rnode = {0};
-	Relation rel;
-	
-	rel = diskquota_relation_open(relid, NoLock);
-	
-	relation_cache_entry = hash_search(relation_cache, &relid, HASH_FIND, NULL);
-	if (relation_cache_entry)
-	{
-		uncommitted_rnode = relation_cache_entry->rnode;
-	}
-
-	if (rel)
-	{
-		rnode.node = rel->rd_node;
-		rnode.backend = rel->rd_backend;
-		relation_close(rel, NoLock);
-		if (!RelFileNodeBackendEquals(rnode, uncommitted_rnode))
-		{
-			remove_cache_entry(relid, uncommitted_rnode.node.relNode);
-		}
-		update_relation_cache(relid);
-		return rnode;
-	}
-
-
-	return uncommitted_rnode;
-}
-
-/*
- * 1. get relid from pg_class
- * 2. remove cache_entry from pg_class_cache, if pg_class exists
- */
-static Oid
-get_relid_by_relfilenode(RelFileNode relfilenode)
-{
-	Oid relid;
-	Oid uncommitted_relid;
-
-	relid = RelidByRelfilenode(relfilenode.spcNode, relfilenode.relNode);
-	uncommitted_relid = get_uncommitted_table_relid(relfilenode);
-	if(OidIsValid(relid))
-	{
-		if(relid != uncommitted_relid && OidIsValid(uncommitted_relid))
-		{
-			remove_cache_entry(uncommitted_relid, relfilenode.relNode);
-		}
-		update_relation_cache(relid);
-		return relid;
-	}
-	return uncommitted_relid;
-}
-
-static Oid
-get_uncommitted_table_relid(RelFileNode relfilenode)
-{
-	Oid relid = InvalidOid;
-	DIskQuotaRelidCacheEntry *entry = hash_search(relid_cache, &relfilenode.relNode, HASH_FIND, NULL);
-	if (entry)
-	{
-		relid = entry->relid;
-	}
-	return relid;
-}
-
-static Oid
-get_primary_table_oid(Oid relid)
-{
-	DiskQuotaRelationCacheEntry *entry = hash_search(relation_cache, &relid, HASH_FIND, NULL);
-	if (entry)
-	{
-		return entry->primary_table_relid;
-	}
-	return InvalidOid;
 }
