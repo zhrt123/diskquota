@@ -32,10 +32,9 @@ extern Oid get_relid_by_relfilenode(RelFileNode relfilenode);
 extern void remove_cache_entry_recursion_wio_lock(Oid relid);
 extern void remove_cache_entry(Oid relid, Oid relfilenode);
 extern Oid get_uncommitted_table_relid(Oid relfilenode);
-extern bool get_table_commit_status(Oid relid);
 extern void update_relation_cache(Oid relid);
 extern Oid get_primary_table_oid(Oid relid);
-
+extern void remove_committed_relation_from_cache(void);
 
 #define atooid(x)  ((Oid) strtoul((x), NULL, 10))
 

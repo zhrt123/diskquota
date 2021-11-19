@@ -212,18 +212,6 @@ get_uncommitted_table_relid(Oid relfilenode)
 	return relid;
 }
 
-bool
-get_table_commit_status(Oid relid)
-{
-	Relation rel = try_relation_open(relid, NoLock, false);
-	if (rel)
-	{
-		relation_close(rel, NoLock);
-		return true;
-	}
-	return false;
-}
-
 static void
 add_subrel_to_relation_cache_entry(DiskQuotaRelationCacheEntry *entry, Oid relid)
 {
@@ -364,6 +352,7 @@ update_relation_cache(Oid relid)
 	DiskQuotaRelationCacheEntry *relation_entry;
 	DiskQuotaRelidCacheEntry relid_entry_data = {0};
 	DiskQuotaRelidCacheEntry *relid_entry;
+	Oid prelid;
 
 	update_relation_entry(relid, &relation_entry_data, &relid_entry_data);
 
@@ -374,6 +363,19 @@ update_relation_cache(Oid relid)
 	relid_entry = hash_search(relid_cache, &relid_entry_data.relfilenode, HASH_ENTER, NULL);
 	memcpy(relid_entry, &relid_entry_data, sizeof(DiskQuotaRelidCacheEntry));
 	LWLockRelease(diskquota_locks.relation_cache_lock);
+
+	prelid = get_primary_table_oid(relid);
+	if (OidIsValid(prelid) && prelid != relid)
+	{
+		LWLockAcquire(diskquota_locks.relation_cache_lock, LW_EXCLUSIVE);
+		relation_entry->primary_table_relid = prelid;
+		relation_entry = hash_search(relation_cache, &prelid, HASH_FIND, NULL);
+		if (relation_entry)
+		{
+			add_subrel_to_relation_cache_entry(relation_entry, relid);
+		}
+		LWLockRelease(diskquota_locks.relation_cache_lock);
+	}
 }
 
 static Oid
@@ -415,22 +417,61 @@ Oid
 get_primary_table_oid(Oid relid)
 {
 	DiskQuotaRelationCacheEntry *relation_entry;
-	Oid prelid = relid;
+	Oid cached_prelid = relid;
+	Oid parsed_prelid;
 
-	if (get_table_commit_status(relid) == true)
+	parsed_prelid = get_primary_table_oid_by_relname(relid);
+	if (OidIsValid(parsed_prelid))
 	{
-		remove_cache_entry(relid, InvalidOid);
-		prelid = get_primary_table_oid_by_relname(relid);
-		return prelid;
+		return parsed_prelid;
 	}
 
 	LWLockAcquire(diskquota_locks.relation_cache_lock, LW_SHARED);
 	relation_entry = hash_search(relation_cache, &relid, HASH_FIND, NULL);
 	if (relation_entry)
 	{
-		prelid = relation_entry->relid;
+		cached_prelid = relation_entry->primary_table_relid;
 	}
 	LWLockRelease(diskquota_locks.relation_cache_lock);
 
-	return prelid;
+	return cached_prelid;
+}
+
+void
+remove_committed_relation_from_cache(void)
+{
+	HeapTuple	tuple;
+	HeapScanDesc relScan;
+	Relation	classRel;
+	Oid relid;
+	List *oid_list = NIL;
+	ListCell *l;
+
+	classRel = heap_open(RelationRelationId, AccessShareLock);
+	relScan = heap_beginscan_catalog(classRel, 0, NULL);
+
+	while ((tuple = heap_getnext(relScan, ForwardScanDirection)) != NULL)
+	{
+		Form_pg_class classForm = (Form_pg_class) GETSTRUCT(tuple);
+
+		if (classForm->relkind != RELKIND_RELATION &&
+			classForm->relkind != RELKIND_MATVIEW)
+			continue;
+		relid = HeapTupleGetOid(tuple);
+		lappend_oid(oid_list, relid);
+	}
+
+	heap_endscan(relScan);
+	heap_close(classRel, AccessShareLock);
+
+	/* use oid_list to avoid hold relation_cache_lock and AccessShareLock of pg_class */
+	LWLockAcquire(diskquota_locks.relation_cache_lock, LW_EXCLUSIVE);
+	foreach(l, oid_list)
+	{
+		relid = lfirst_oid(l);
+		remove_cache_entry(relid, InvalidOid);
+	}
+	LWLockRelease(diskquota_locks.relation_cache_lock);
+
+	list_free(oid_list);
 }

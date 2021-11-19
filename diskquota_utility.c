@@ -1171,7 +1171,7 @@ get_rel_oid_list(void)
 		{
 			Relation	relation;
 			List	   	*indexIds;
-			relation = try_relation_open(oid, AccessShareLock, false);
+			relation = try_relation_open(oid, NoLock, false);
 			if (!relation)
 				continue;
 
@@ -1184,7 +1184,7 @@ get_rel_oid_list(void)
 					oidlist = lappend_oid(oidlist, lfirst_oid(l));
 				}
 			}
-		        relation_close(relation, NoLock);
+		    relation_close(relation, NoLock);
 			list_free(indexIds);
 		}
 	}

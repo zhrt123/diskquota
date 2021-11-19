@@ -39,6 +39,7 @@
 #include "utils/fmgroids.h"
 #include "utils/lsyscache.h"
 #include "utils/relfilenodemap.h"
+#include "utils/syscache.h"
 
 #include "gp_utils.h"
 #include "gp_activetable.h"
@@ -157,8 +158,6 @@ active_table_hook_smgrextend(RelFileNodeBackend rnode)
 	// 	quota_check_common(primary_table_oid);
 	// }
 
-	report_relation_cache_helper(InvalidOid, &rnode);
-
 	report_active_table_helper(&rnode);
 }
 
@@ -222,24 +221,14 @@ report_relation_cache_helper(Oid relid, RelFileNodeBackend* rnode)
 	if (OidIsValid(relid))
 	{
 		// skip committed table
-		if (get_table_commit_status(relid) == true)
+		if (SearchSysCacheExists1(RELOID, relid))
 		{
 			return;
 		}
-		
+
 		rel = diskquota_relation_open(relid, NoLock);
 		dbid = rel->rd_node.dbNode;
 		relation_close(rel, NoLock);
-	}
-	else
-	{
-		// skip committed table or inexistent table
-		relid = get_uncommitted_table_relid(rnode->node.relNode);
-		if (!OidIsValid(relid) || get_table_commit_status(relid) == true)
-		{
-			return;
-		}
-		dbid = rnode->node.dbNode;
 	}
 
 	/* do not collect active table info when the database is not under monitoring.
@@ -545,6 +534,8 @@ get_active_tables_stats(ArrayType *array)
 							  1024,
 							  &ctl,
 							  HASH_ELEM | HASH_CONTEXT | HASH_FUNCTION);
+
+	remove_committed_relation_from_cache();
 
 	for (i = 0; i < nitems; i++)
 	{
