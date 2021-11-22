@@ -264,7 +264,7 @@ update_subtable_relation_entry(Oid relid, DiskQuotaRelationCacheEntry *pentry)
 
 	if (rel->rd_rel && rel->rd_rel->relhasindex)
 	{
-		List	   *index_oids = RelationGetIndexList(rel);
+		List	   *index_oids = diskquota_get_index_list(relid);
 		ListCell   *cell;
 		foreach(cell, index_oids)
 		{

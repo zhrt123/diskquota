@@ -11,7 +11,11 @@
  */
 
 #include "postgres.h"
+#include "catalog/indexing.h"
 #include "access/heapam.h"
+#include "access/genam.h"
+#include "utils/fmgroids.h"
+#include "access/htup_details.h"
 #include "miscadmin.h"
 #include "fmgr.h"
 
@@ -98,4 +102,51 @@ diskquota_relation_open(Oid relid, LOCKMODE mode)
 	}
 	PG_END_TRY();
 	return success_open ? rel : NULL;
+}
+
+List*
+diskquota_get_index_list(Oid relid)
+{
+    Relation	indrel;
+	SysScanDesc indscan;
+	ScanKeyData skey;
+	HeapTuple	htup;
+	List	   *result;
+	Oid			oidIndex = InvalidOid;
+
+	result = NIL;
+	oidIndex = InvalidOid;
+
+	/* Prepare to scan pg_index for entries having indrelid = this rel. */
+	ScanKeyInit(&skey,
+				Anum_pg_index_indrelid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				relid);
+
+	indrel = heap_open(IndexRelationId, AccessShareLock);
+	indscan = systable_beginscan(indrel, IndexIndrelidIndexId, true,
+								 NULL, 1, &skey);
+
+	while (HeapTupleIsValid(htup = systable_getnext(indscan)))
+	{
+		Form_pg_index index = (Form_pg_index) GETSTRUCT(htup);
+
+		/*
+		 * Ignore any indexes that are currently being dropped.  This will
+		 * prevent them from being searched, inserted into, or considered in
+		 * HOT-safety decisions.  It's unsafe to touch such an index at all
+		 * since its catalog entries could disappear at any instant.
+		 */
+		if (!IndexIsLive(index))
+			continue;
+
+		/* Add index's OID to result list in the proper order */
+		result = lappend_oid(result, index->indexrelid);
+	}
+
+	systable_endscan(indscan);
+
+	heap_close(indrel, AccessShareLock);
+
+	return result;
 }

@@ -18,5 +18,6 @@
 
 extern Size diskquota_get_relation_size_by_relfilenode(RelFileNodeBackend *rnode);
 extern Relation diskquota_relation_open(Oid relid, LOCKMODE mode);
+extern List* diskquota_get_index_list(Oid relid);
 
 #endif //DISKQUOTA_GP_UTILS_H

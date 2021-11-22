@@ -49,6 +49,7 @@
 
 #include "diskquota.h"
 #include "gp_activetable.h"
+#include "gp_utils.h"
 
 /* disk quota helper function */
 
@@ -1176,7 +1177,7 @@ get_rel_oid_list(void)
 				continue;
 
 			oidlist = lappend_oid(oidlist, oid);
-			indexIds = RelationGetIndexList(relation);
+			indexIds = diskquota_get_index_list(oid);
 			if (indexIds != NIL )
 			{
 				foreach(l, indexIds)
