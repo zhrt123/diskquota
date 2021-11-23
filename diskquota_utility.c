@@ -43,6 +43,7 @@
 
 #include <cdb/cdbvars.h>
 #include <cdb/cdbutil.h>
+#include <sys/stat.h>
 
 #include "diskquota.h"
 #include "gp_activetable.h"
@@ -1104,4 +1105,59 @@ get_rel_oid_list(void)
 		}
 	}
 	return oidlist;
+}
+
+/*
+ * calculate size of (one fork of) a table in transaction
+ * This function is following calculate_relation_size()
+ */
+Size
+diskquota_get_relation_size_by_relfilenode(RelFileNodeBackend *rnode)
+{
+    int64       totalsize = 0;
+    ForkNumber  forkNum;
+    int64       size = 0;
+    char       *relationpath;
+    char        pathname[MAXPGPATH];
+    unsigned int segcount = 0;
+    PG_TRY();
+	{
+        for (forkNum = 0; forkNum <= MAX_FORKNUM; forkNum++)
+        {
+            relationpath = relpathbackend(rnode->node, rnode->backend, forkNum);
+            size = 0;
+
+            for (segcount = 0;; segcount++)
+            {
+                struct stat fst;
+
+                CHECK_FOR_INTERRUPTS();
+
+                if (segcount == 0)
+                    snprintf(pathname, MAXPGPATH, "%s",
+                            relationpath);
+                else
+                    snprintf(pathname, MAXPGPATH, "%s.%u",
+                            relationpath, segcount);
+
+                if (stat(pathname, &fst) < 0)
+                {
+                    if (errno == ENOENT)
+                        break;
+                }
+                size += fst.st_size;
+            }
+
+            totalsize += size;
+        }
+    }
+	PG_CATCH();
+	{
+		HOLD_INTERRUPTS();
+		FlushErrorState();
+		RESUME_INTERRUPTS();
+	}
+	PG_END_TRY();
+
+    return totalsize;
 }

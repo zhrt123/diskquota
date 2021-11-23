@@ -116,4 +116,5 @@ extern int 	SEGCOUNT;
 extern int  get_ext_major_version(void);
 extern void truncateStringInfo(StringInfo str, int nchars);
 extern List *get_rel_oid_list(void);
+extern Size diskquota_get_relation_size_by_relfilenode(RelFileNodeBackend *rnode);
 #endif
