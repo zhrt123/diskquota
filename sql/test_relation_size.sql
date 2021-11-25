@@ -11,7 +11,7 @@ SELECT pg_table_size('t2');
 -- start_ignore
 \! mkdir /tmp/test_spc
 -- end_ignore
-DROP TABLESPACE  IF EXISTS test_spc;
+DROP TABLESPACE IF EXISTS test_spc;
 CREATE TABLESPACE test_spc LOCATION '/tmp/test_spc';
 
 ALTER TABLE t1 SET TABLESPACE test_spc;
