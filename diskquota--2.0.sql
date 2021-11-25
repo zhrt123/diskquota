@@ -128,7 +128,7 @@ LANGUAGE C VOLATILE;
 SELECT diskquota.diskquota_start_worker();
 DROP FUNCTION diskquota.diskquota_start_worker();
 
-
+-- TODO: support upgrade/downgrade
 CREATE OR REPLACE FUNCTION diskquota.relation_size_local(
         reltablespace oid, 
         relfilenode oid, 
