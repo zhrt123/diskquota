@@ -16,10 +16,11 @@
 #include "postgres.h"
 
 #include "access/htup_details.h"
-#include "access/xact.h"
 #include "catalog/indexing.h"
 #include "catalog/pg_class.h"
+#include "catalog/pg_namespace.h"
 #include "catalog/pg_type.h"
+#include "catalog/objectaccess.h"
 #include "cdb/cdbbufferedappend.h"
 #include "cdb/cdbdisp_query.h"
 #include "cdb/cdbdispatchresult.h"
@@ -35,13 +36,14 @@
 #include "storage/smgr.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
-#include "utils/faultinjector.h"
 #include "utils/fmgroids.h"
 #include "utils/lsyscache.h"
 #include "utils/relfilenodemap.h"
+#include "utils/syscache.h"
 
 #include "gp_activetable.h"
 #include "diskquota.h"
+#include "relation_cache.h"
 
 PG_FUNCTION_INFO_V1(diskquota_fetch_table_stat);
 
@@ -59,10 +61,14 @@ HTAB	   *monitoring_dbid_cache = NULL;
 static file_create_hook_type prev_file_create_hook = NULL;
 static file_extend_hook_type prev_file_extend_hook = NULL;
 static file_truncate_hook_type prev_file_truncate_hook = NULL;
+static file_unlink_hook_type prev_file_unlink_hook = NULL;
+static object_access_hook_type prev_object_access_hook = NULL;
 
 static void active_table_hook_smgrcreate(RelFileNodeBackend rnode);
 static void active_table_hook_smgrextend(RelFileNodeBackend rnode);
 static void active_table_hook_smgrtruncate(RelFileNodeBackend rnode);
+static void active_table_hook_smgrunlink(RelFileNodeBackend rnode);
+static void object_access_hook_QuotaStmt(ObjectAccessType access, Oid classId, Oid objectId, int subId, void *arg);
 
 static HTAB *get_active_tables_stats(ArrayType *array);
 static HTAB *get_active_tables_oid(void);
@@ -71,6 +77,7 @@ static void pull_active_table_size_from_seg(HTAB *local_table_stats_map, char *a
 static StringInfoData convert_map_to_string(HTAB *active_list);
 static void load_table_size(HTAB *local_table_stats_map);
 static void report_active_table_helper(const RelFileNodeBackend *relFileNode);
+static void report_relation_cache_helper(Oid relid, RelFileNodeBackend *rnode);
 
 void		init_active_table_hook(void);
 void		init_shm_worker_active_tables(void);
@@ -112,6 +119,12 @@ init_active_table_hook(void)
 
 	prev_file_truncate_hook = file_truncate_hook;
 	file_truncate_hook = active_table_hook_smgrtruncate;
+
+	prev_file_unlink_hook = file_unlink_hook;
+	file_unlink_hook = active_table_hook_smgrunlink;
+
+	prev_object_access_hook = object_access_hook;
+	object_access_hook = object_access_hook_QuotaStmt;
 }
 
 /*
@@ -150,6 +163,76 @@ active_table_hook_smgrtruncate(RelFileNodeBackend rnode)
 		(*prev_file_truncate_hook) (rnode);
 
 	report_active_table_helper(&rnode);
+}
+
+static void active_table_hook_smgrunlink(RelFileNodeBackend rnode)
+{
+	if (prev_file_unlink_hook)
+		(*prev_file_unlink_hook) (rnode);
+
+	remove_cache_entry(InvalidOid, rnode.node.relNode);
+}
+
+static void object_access_hook_QuotaStmt(ObjectAccessType access, Oid classId, Oid objectId, int subId, void *arg)
+{
+	if (prev_object_access_hook)
+		(*prev_object_access_hook)(access, classId, objectId, subId, arg);
+
+	// TODO: do we need to use "and" instead of "or"?
+	if (classId != RelationRelationId || subId != 0)
+	{
+		return;
+	}
+
+	if (objectId < FirstNormalObjectId)
+	{
+		return;
+	}
+
+	if (access != OAT_POST_CREATE && access != OAT_POST_ALTER)
+	{
+		return;
+	}
+
+	report_relation_cache_helper(objectId, NULL);
+}
+
+static void
+report_relation_cache_helper(Oid relid, RelFileNodeBackend* rnode)
+{
+	Relation rel;
+	bool found;
+	Oid dbid;
+	
+	/* We do not collect the active table in either master or mirror segments  */
+	if (IS_QUERY_DISPATCHER() || IsRoleMirror())
+	{
+		return;
+	}
+
+	if (OidIsValid(relid))
+	{
+		// skip committed table
+		if (SearchSysCacheExists1(RELOID, relid))
+		{
+			return;
+		}
+
+		rel = diskquota_relation_open(relid, NoLock);
+		dbid = rel->rd_node.dbNode;
+		relation_close(rel, NoLock);
+	}
+
+	/* do not collect active table info when the database is not under monitoring.
+	 * this operation is read-only and does not require absolutely exact.
+	 * read the cache with out shared lock */
+	hash_search(monitoring_dbid_cache, &dbid, HASH_FIND, &found);
+	if (!found)
+	{
+		return;
+	}
+
+	update_relation_cache(relid);
 }
 
 /*
@@ -419,6 +502,7 @@ get_active_tables_stats(ArrayType *array)
 	HASHCTL		ctl;
 	TableEntryKey key;
 	DiskQuotaActiveTableEntry *entry;
+	bool		found;
 
 	Assert(ARR_ELEMTYPE(array) == OIDOID);
 
@@ -443,6 +527,8 @@ get_active_tables_stats(ArrayType *array)
 							  &ctl,
 							  HASH_ELEM | HASH_CONTEXT | HASH_FUNCTION);
 
+	remove_committed_relation_from_cache();
+
 	for (i = 0; i < nitems; i++)
 	{
 		/*
@@ -455,68 +541,25 @@ get_active_tables_stats(ArrayType *array)
 		}
 		else
 		{
-			MemoryContext			oldcontext;
-			ResourceOwner			oldowner;
-
 			relOid = DatumGetObjectId(fetch_att(ptr, typbyval, typlen));
 			segId = GpIdentity.segindex;
+
+			Oid primary_table_oid = get_primary_table_oid(relOid);
+			if (OidIsValid(primary_table_oid))
+			{
+				relOid = primary_table_oid;
+			}
+
 			key.reloid = relOid;
 			key.segid = segId;
 
-			entry = (DiskQuotaActiveTableEntry *) hash_search(local_table, &key, HASH_ENTER, NULL);
-			entry->reloid = relOid;
-			entry->segid = segId;
-
-			/*
-			 * pg_table_size() may throw exceptions, in order not to abort the top level
-			 * transaction, we start a subtransaction for it. This operation is expensive,
-			 * but there're good reasons. E.g.,
-			 * When the subtransaction is aborted, the resources (e.g., locks) acquired
-			 * in pg_table_size() are released in time. We can avoid potential deadlock
-			 * risks by doing this.
-			 */
-			oldcontext = CurrentMemoryContext;
-			oldowner = CurrentResourceOwner;
-
-			BeginInternalSubTransaction(NULL /* save point name */);
-			/* Run inside the function's memory context. */
-			MemoryContextSwitchTo(oldcontext);
-			PG_TRY();
+			entry = (DiskQuotaActiveTableEntry *) hash_search(local_table, &key, HASH_ENTER, &found);
+			if (!found)
 			{
-				/* call pg_table_size to get the active table size */
-				entry->tablesize = (Size) DatumGetInt64(DirectFunctionCall1(pg_table_size,
-																			ObjectIdGetDatum(relOid)));
-
-#ifdef FAULT_INJECTOR
-				SIMPLE_FAULT_INJECTOR("diskquota_fetch_table_stat");
-#endif
-				/* Commit the subtransaction. */
-				ReleaseCurrentSubTransaction();
-				MemoryContextSwitchTo(oldcontext);
-				CurrentResourceOwner = oldowner;
+				entry->reloid = relOid;
+				entry->segid = segId;
+				entry->tablesize = calculate_table_size(relOid);
 			}
-			PG_CATCH();
-			{
-				ErrorData		   *edata;
-
-				/*
-				 * Save the error information, or we have no idea what is causing the
-				 * exception.
-				 */
-				MemoryContextSwitchTo(oldcontext);
-				edata = CopyErrorData();
-				FlushErrorState();
-
-				/* Abort the subtransaction and rollback. */
-				RollbackAndReleaseCurrentSubTransaction();
-				MemoryContextSwitchTo(oldcontext);
-				CurrentResourceOwner = oldowner;
-				elog(WARNING, "%s", edata->message);
-				FreeErrorData(edata);
-
-				entry->tablesize = 0;
-			}
-			PG_END_TRY();
 
 			ptr = att_addlength_pointer(ptr, typlen, ptr);
 			ptr = (char *) att_align_nominal(ptr, typalign);
@@ -613,8 +656,13 @@ get_active_tables_oid(void)
 	while ((active_table_file_entry = (DiskQuotaActiveTableFileEntry *) hash_seq_search(&iter)) != NULL)
 	{
 		bool		found;
+		RelFileNode rnode;
 
-		relOid = RelidByRelfilenode(active_table_file_entry->tablespaceoid, active_table_file_entry->relfilenode);
+		rnode.dbNode = active_table_file_entry->dbid;
+		rnode.relNode = active_table_file_entry->relfilenode;
+		rnode.spcNode = active_table_file_entry->tablespaceoid;
+		relOid = get_relid_by_relfilenode(rnode);
+		
 		if (relOid != InvalidOid)
 		{
 			active_table_entry = hash_search(local_active_table_stats_map, &relOid, HASH_ENTER, &found);
