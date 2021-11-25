@@ -1233,6 +1233,7 @@ calculate_relation_size_all_forks(RelFileNodeBackend *rnode)
                     if (errno == ENOENT)
                         break;
                     else
+                        /* TODO: Do we need this? */
                         ereport(ERROR,
                             (errcode_for_file_access(),
                                 errmsg("[diskquota] could not stat file %s: %m", pathname)));
