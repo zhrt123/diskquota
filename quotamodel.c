@@ -37,6 +37,7 @@
 #include "storage/lwlock.h"
 #include "storage/shmem.h"
 #include "utils/builtins.h"
+#include "utils/guc.h"
 #include "utils/fmgroids.h"
 #include "utils/lsyscache.h"
 #include "utils/snapmgr.h"
@@ -59,6 +60,8 @@
 /* per database level max size of black list */
 #define MAX_LOCAL_DISK_QUOTA_BLACK_ENTRIES 8192
 #define MAX_NUM_KEYS_QUOTA_MAP 8
+/* Number of attributes in quota configuration records. */
+#define NUM_QUOTA_CONFIG_ATTRS 5
 
 typedef struct TableSizeEntry TableSizeEntry;
 typedef struct NamespaceSizeEntry NamespaceSizeEntry;
@@ -402,10 +405,11 @@ disk_quota_shmem_startup(void)
 	init_lwlocks();
 
 	/*
-	 * Three shared memory data. extension_ddl_message is used to handle
+	 * Four shared memory data. extension_ddl_message is used to handle
 	 * diskquota extension create/drop command. disk_quota_black_map is used
 	 * to store out-of-quota blacklist. active_tables_map is used to store
-	 * active tables whose disk usage is changed.
+	 * active tables whose disk usage is changed. diskquota_paused is a flag
+	 * used to pause the extension.
 	 */
 	extension_ddl_message = ShmemInitStruct("disk_quota_extension_ddl_message",
 											sizeof(ExtensionDDLMessage),
@@ -437,6 +441,12 @@ disk_quota_shmem_startup(void)
 			&hash_ctl,
 			HASH_ELEM | HASH_FUNCTION);
 
+	diskquota_paused = ShmemInitStruct("diskquota_paused",
+											sizeof(bool),
+											&found);
+	if (!found)
+		memset((void *) diskquota_paused, 0, sizeof(bool));
+
 	LWLockRelease(AddinShmemInitLock);
 }
 
@@ -458,6 +468,7 @@ init_lwlocks(void)
 	diskquota_locks.extension_ddl_message_lock = LWLockAssign();
 	diskquota_locks.extension_ddl_lock = LWLockAssign();
 	diskquota_locks.monitoring_dbid_cache_lock = LWLockAssign();
+	diskquota_locks.paused_lock = LWLockAssign();
 }
 
 /*
@@ -473,6 +484,7 @@ DiskQuotaShmemSize(void)
 	size = add_size(size, hash_estimate_size(MAX_DISK_QUOTA_BLACK_ENTRIES, sizeof(GlobalBlackMapEntry)));
 	size = add_size(size, hash_estimate_size(diskquota_max_active_tables, sizeof(DiskQuotaActiveTableEntry)));
 	size = add_size(size, hash_estimate_size(MAX_NUM_MONITORED_DB, sizeof(Oid)));
+	size += sizeof(bool); /* sizeof(*diskquota_paused) */
 	return size;
 }
 
@@ -677,7 +689,6 @@ refresh_disk_quota_usage(bool is_init)
 	bool		pushed_active_snap = false;
 	bool		ret = true;
 
-	elog(LOG, "refresh diskquota usage...");
 	StartTransactionCommand();
 
 	/*
@@ -956,6 +967,7 @@ flush_to_table_size(void)
 	TableSizeEntry *tsentry = NULL;
 	StringInfoData delete_statement;
 	StringInfoData insert_statement;
+	StringInfoData deleted_table_expr;
 	bool		delete_statement_flag = false;
 	bool		insert_statement_flag = false;
 	int		ret;
@@ -963,21 +975,12 @@ flush_to_table_size(void)
 
 	/* TODO: Add flush_size_interval to avoid flushing size info in every loop */
 
-	/* concatenate all the need_to_flush table to SQL string */
-	initStringInfo(&delete_statement);
-	switch (extMajorVersion)
-	{
-		case 1:
-			appendStringInfo(&delete_statement, "delete from diskquota.table_size where tableid in ( ");
-			break;
-		case 2:
-			appendStringInfo(&delete_statement, "delete from diskquota.table_size where (tableid, segid) in ( ");
-			break;
-		default:
-			ereport(ERROR,
-					(errcode(ERRCODE_INTERNAL_ERROR),
-					 errmsg("[diskquota] unknown diskquota extension version: %d", extMajorVersion)));
-	}
+	/* Disable ORCA since it does not support non-scalar subqueries. */
+	bool old_optimizer = optimizer;
+	optimizer = false;
+
+	initStringInfo(&deleted_table_expr);
+	appendStringInfo(&deleted_table_expr, "WITH deleted_table AS ( VALUES ");
 
 	initStringInfo(&insert_statement);
 	appendStringInfo(&insert_statement, "insert into diskquota.table_size values ");
@@ -990,10 +993,10 @@ flush_to_table_size(void)
 			switch (extMajorVersion)
 			{
 				case 1:
-					appendStringInfo(&delete_statement, "%u, ", tsentry->reloid);
+					appendStringInfo(&deleted_table_expr, "%u, ", tsentry->reloid);
 					break;
 				case 2:
-					appendStringInfo(&delete_statement, "(%u,%d), ", tsentry->reloid, tsentry->segid);
+					appendStringInfo(&deleted_table_expr, "(%u,%d), ", tsentry->reloid, tsentry->segid);
 					break;
 				default:
 					ereport(ERROR,
@@ -1015,14 +1018,14 @@ flush_to_table_size(void)
 				case 1:
 					if (tsentry->segid == -1)
 					{
-						appendStringInfo(&delete_statement, "%u, ", tsentry->reloid);
+						appendStringInfo(&deleted_table_expr, "%u, ", tsentry->reloid);
 						appendStringInfo(&insert_statement, "(%u,%ld), ", tsentry->reloid, tsentry->totalsize);
 						delete_statement_flag = true;
 						insert_statement_flag = true;
 					}
 					break;
 				case 2:
-					appendStringInfo(&delete_statement, "(%u,%d), ", tsentry->reloid, tsentry->segid);
+					appendStringInfo(&deleted_table_expr, "(%u,%d), ", tsentry->reloid, tsentry->segid);
 					appendStringInfo(&insert_statement, "(%u,%ld,%d), ", tsentry->reloid, tsentry->totalsize, tsentry->segid);
 					delete_statement_flag = true;
 					insert_statement_flag = true;
@@ -1034,13 +1037,29 @@ flush_to_table_size(void)
 			}
 		}
 	}
-	truncateStringInfo(&delete_statement, delete_statement.len - strlen(", "));
+	truncateStringInfo(&deleted_table_expr, deleted_table_expr.len - strlen(", "));
 	truncateStringInfo(&insert_statement, insert_statement.len - strlen(", "));
-	appendStringInfo(&delete_statement, ");");
+	appendStringInfo(&deleted_table_expr, ")");
 	appendStringInfo(&insert_statement, ";");
 
 	if (delete_statement_flag)
 	{
+		/* concatenate all the need_to_flush table to SQL string */
+		initStringInfo(&delete_statement);
+		appendStringInfoString(&delete_statement, (const char *) deleted_table_expr.data);
+		switch (extMajorVersion)
+		{
+			case 1:
+				appendStringInfo(&delete_statement, "delete from diskquota.table_size where tableid in ( SELECT * FROM deleted_table );");
+				break;
+			case 2:
+				appendStringInfo(&delete_statement, "delete from diskquota.table_size where (tableid, segid) in ( SELECT * FROM deleted_table );");
+				break;
+			default:
+				ereport(ERROR,
+						(errcode(ERRCODE_INTERNAL_ERROR),
+						errmsg("[diskquota] unknown diskquota extension version: %d", extMajorVersion)));
+		}
 		ret = SPI_execute(delete_statement.data, false, 0);
 		if (ret != SPI_OK_DELETE)
 			ereport(ERROR, (errcode(ERRCODE_INTERNAL_ERROR),
@@ -1053,6 +1072,8 @@ flush_to_table_size(void)
 			ereport(ERROR, (errcode(ERRCODE_INTERNAL_ERROR),
 							errmsg("[diskquota] flush_to_table_size SPI_execute failed: error code %d", ret)));
 	}
+
+	optimizer = old_optimizer;
 }
 
 /*
@@ -1200,7 +1221,6 @@ do_load_quotas(void)
 	 * config change.
 	 */
 	clear_all_quota_maps();
-	const unsigned int NUM_ATTRIBUTES = 5;
 	extMajorVersion = get_ext_major_version();
 
 	/*
@@ -1240,7 +1260,7 @@ do_load_quotas(void)
 				errmsg("[diskquota] load_quotas SPI_execute failed: error code %d", ret)));
 
 	tupdesc = SPI_tuptable->tupdesc;
-	if (tupdesc->natts != NUM_ATTRIBUTES ||
+	if (tupdesc->natts != NUM_QUOTA_CONFIG_ATTRS ||
 			((tupdesc)->attrs[0])->atttypid != OIDOID ||
 			((tupdesc)->attrs[1])->atttypid != INT4OID ||
 			((tupdesc)->attrs[2])->atttypid != INT8OID)
@@ -1255,10 +1275,10 @@ do_load_quotas(void)
 	for (i = 0; i < SPI_processed; i++)
 	{
 		HeapTuple	tup = SPI_tuptable->vals[i];
-		Datum		vals[NUM_ATTRIBUTES];
-		bool		isnull[NUM_ATTRIBUTES];
+		Datum		vals[NUM_QUOTA_CONFIG_ATTRS];
+		bool		isnull[NUM_QUOTA_CONFIG_ATTRS];
 
-		for (int i = 0; i < NUM_ATTRIBUTES; ++i)
+		for (int i = 0; i < NUM_QUOTA_CONFIG_ATTRS; ++i)
 		{
 			vals[i] = SPI_getbinval(tup, tupdesc, i + 1, &(isnull[i]));
 			if (i <= 2 && isnull[i])
@@ -1326,6 +1346,7 @@ quota_check_common(Oid reloid)
 	Oid			nsOid = InvalidOid;
 	Oid 		tablespaceoid = InvalidOid;
 	bool		found;
+	bool		paused;
 	BlackMapEntry keyitem;
 	GlobalBlackMapEntry *entry;
 
@@ -1339,6 +1360,14 @@ quota_check_common(Oid reloid)
 	{
 		return true;
 	}
+
+	LWLockAcquire(diskquota_locks.paused_lock, LW_SHARED);
+	paused = *diskquota_paused;
+	LWLockRelease(diskquota_locks.paused_lock);
+
+	if (paused)
+		return true;
+
 	LWLockAcquire(diskquota_locks.black_map_lock, LW_SHARED);
 	for (QuotaType type = 0; type < NUM_QUOTA_TYPES; ++type)
 	{
