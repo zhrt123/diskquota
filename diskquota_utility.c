@@ -1202,14 +1202,15 @@ get_rel_oid_list(void)
 static int64
 calculate_relation_size_all_forks(RelFileNodeBackend *rnode)
 {
-    int64       totalsize = 0;
-    ForkNumber  forkNum;
-    int64       size = 0;
-    char       *relationpath;
-    char        pathname[MAXPGPATH];
+	int64		totalsize = 0;
+	ForkNumber	forkNum;
+	int64		size = 0;
+	char	   *relationpath;
+	char		pathname[MAXPGPATH];
     unsigned int segcount = 0;
-    PG_TRY();
-    {
+
+	PG_TRY();
+	{
         for (forkNum = 0; forkNum <= MAX_FORKNUM; forkNum++)
         {
             relationpath = relpathbackend(rnode->node, rnode->backend, forkNum);
@@ -1223,10 +1224,10 @@ calculate_relation_size_all_forks(RelFileNodeBackend *rnode)
 
                 if (segcount == 0)
                     snprintf(pathname, MAXPGPATH, "%s",
-                            relationpath);
+							 relationpath);
                 else
                     snprintf(pathname, MAXPGPATH, "%s.%u",
-                            relationpath, segcount);
+							 relationpath, segcount);
 
                 if (stat(pathname, &fst) < 0)
                 {
@@ -1235,8 +1236,8 @@ calculate_relation_size_all_forks(RelFileNodeBackend *rnode)
                     else
                         /* TODO: Do we need this? */
                         ereport(ERROR,
-                            (errcode_for_file_access(),
-                                errmsg("[diskquota] could not stat file %s: %m", pathname)));
+								(errcode_for_file_access(),
+								 errmsg("[diskquota] could not stat file %s: %m", pathname)));
                 }
                 size += fst.st_size;
             }
@@ -1267,7 +1268,8 @@ relation_size_local(PG_FUNCTION_ARGS)
 
     rnode.node.dbNode = MyDatabaseId;
     rnode.node.relNode = relfilenode;
-    rnode.node.spcNode = OidIsValid(reltablespace) ? reltablespace : MyDatabaseTableSpace;
+    rnode.node.spcNode = OidIsValid(reltablespace) ?
+		reltablespace : MyDatabaseTableSpace;
     rnode.backend = backend;
 
     size = calculate_relation_size_all_forks(&rnode);
