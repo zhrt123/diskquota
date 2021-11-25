@@ -64,6 +64,7 @@ PG_FUNCTION_INFO_V1(set_schema_tablespace_quota);
 PG_FUNCTION_INFO_V1(set_role_tablespace_quota);
 PG_FUNCTION_INFO_V1(update_diskquota_db_list);
 PG_FUNCTION_INFO_V1(set_per_segment_quota);
+PG_FUNCTION_INFO_V1(relation_size_local);
 
 /* timeout count to wait response from launcher process, in 1/10 sec */
 #define WAIT_TIME_COUNT  1200
@@ -78,6 +79,7 @@ static void set_quota_config_internal(Oid targetoid, int64 quota_limit_mb, Quota
 static void set_target_internal(Oid primaryoid, Oid spcoid, int64 quota_limit_mb, QuotaType type);
 static bool generate_insert_table_size_sql(StringInfoData *buf, int extMajorVersion);
 static char *convert_oidlist_to_string(List *oidlist);
+static int64 calculate_relation_size_all_forks(RelFileNodeBackend *rnode);
 
 int get_ext_major_version(void);
 List *get_rel_oid_list(void);
@@ -1197,7 +1199,7 @@ get_rel_oid_list(void)
  * calculate size of (all forks of) a relation in transaction
  * This function is following calculate_relation_size()
  */
-static Size
+static int64
 calculate_relation_size_all_forks(RelFileNodeBackend *rnode)
 {
     int64       totalsize = 0;
@@ -1207,7 +1209,7 @@ calculate_relation_size_all_forks(RelFileNodeBackend *rnode)
     char        pathname[MAXPGPATH];
     unsigned int segcount = 0;
     PG_TRY();
-	{
+    {
         for (forkNum = 0; forkNum <= MAX_FORKNUM; forkNum++)
         {
             relationpath = relpathbackend(rnode->node, rnode->backend, forkNum);
@@ -1230,6 +1232,10 @@ calculate_relation_size_all_forks(RelFileNodeBackend *rnode)
                 {
                     if (errno == ENOENT)
                         break;
+                    else
+                        ereport(ERROR,
+                            (errcode_for_file_access(),
+                                errmsg("[diskquota] could not stat file %s: %m", pathname)));
                 }
                 size += fst.st_size;
             }
@@ -1239,7 +1245,7 @@ calculate_relation_size_all_forks(RelFileNodeBackend *rnode)
     }
 	PG_CATCH();
 	{
-		// TODO: Record the error message to pg_log
+		/* TODO: Record the error message to pg_log */
 		HOLD_INTERRUPTS();
 		FlushErrorState();
 		RESUME_INTERRUPTS();
@@ -1249,20 +1255,18 @@ calculate_relation_size_all_forks(RelFileNodeBackend *rnode)
     return totalsize;
 }
 
-PG_FUNCTION_INFO_V1(relation_size_local);
-
 Datum
 relation_size_local(PG_FUNCTION_ARGS)
 {
     Oid reltablespace = PG_GETARG_OID(0);
-	Oid relfilenode = PG_GETARG_OID(1);
+    Oid relfilenode = PG_GETARG_OID(1);
     int backend = PG_GETARG_BOOL(2) ? -2 : -1;
     RelFileNodeBackend rnode = {0};
-    Size size = 0;
+    int64 size = 0;
 
     rnode.node.dbNode = MyDatabaseId;
     rnode.node.relNode = relfilenode;
-    rnode.node.spcNode = reltablespace ? reltablespace : DEFAULTTABLESPACE_OID;
+    rnode.node.spcNode = OidIsValid(reltablespace) ? reltablespace : MyDatabaseTableSpace;
     rnode.backend = backend;
 
     size = calculate_relation_size_all_forks(&rnode);

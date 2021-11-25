@@ -1,30 +1,30 @@
-create temp table t1(i int);
+CREATE TEMP TABLE t1(i int);
 NOTICE:  Table doesn't have 'DISTRIBUTED BY' clause -- Using column named 'i' as the Greenplum Database data distribution key for this table.
 HINT:  The 'DISTRIBUTED BY' clause determines the distribution of data. Make sure column(s) chosen are the optimal data distribution key to minimize skew.
-insert into t1 select generate_series(1, 10000);
-select diskquota.relation_size('t1', true);
+INSERT INTO t1 SELECT generate_series(1, 10000);
+SELECT diskquota.relation_size('t1', true);
  relation_size 
 ---------------
         688128
 (1 row)
 
-select pg_table_size('t1');
+SELECT pg_table_size('t1');
  pg_table_size 
 ---------------
         688128
 (1 row)
 
-create table t2(i int);
+CREATE TABLE t2(i int);
 NOTICE:  Table doesn't have 'DISTRIBUTED BY' clause -- Using column named 'i' as the Greenplum Database data distribution key for this table.
 HINT:  The 'DISTRIBUTED BY' clause determines the distribution of data. Make sure column(s) chosen are the optimal data distribution key to minimize skew.
-insert into t2 select generate_series(1, 10000);
-select diskquota.relation_size('t2', false);
+INSERT INTO t2 SELECT generate_series(1, 10000);
+SELECT diskquota.relation_size('t2', false);
  relation_size 
 ---------------
         688128
 (1 row)
 
-select pg_table_size('t2');
+SELECT pg_table_size('t2');
  pg_table_size 
 ---------------
         688128
@@ -36,34 +36,34 @@ select pg_table_size('t2');
 DROP TABLESPACE  IF EXISTS test_spc;
 NOTICE:  tablespace "test_spc" does not exist, skipping
 CREATE TABLESPACE test_spc LOCATION '/tmp/test_spc';
-alter table t1 set tablespace test_spc;
-insert into t1 select generate_series(1, 10000);
-select diskquota.relation_size('t1', true);
+ALTER TABLE t1 SET TABLESPACE test_spc;
+INSERT INTO t1 SELECT generate_series(1, 10000);
+SELECT diskquota.relation_size('t1', true);
  relation_size 
 ---------------
        1081344
 (1 row)
 
-select pg_table_size('t1');
+SELECT pg_table_size('t1');
  pg_table_size 
 ---------------
        1081344
 (1 row)
 
-alter table t2 set tablespace test_spc;
-insert into t2 select generate_series(1, 10000);
-select diskquota.relation_size('t2', false);
+ALTER TABLE t2 SET TABLESPACE test_spc;
+INSERT INTO t2 SELECT generate_series(1, 10000);
+SELECT diskquota.relation_size('t2', false);
  relation_size 
 ---------------
        1081344
 (1 row)
 
-select pg_table_size('t2');
+SELECT pg_table_size('t2');
  pg_table_size 
 ---------------
        1081344
 (1 row)
 
-drop table t1, t2;
-drop tablespace test_spc;
+DROP TABLE t1, t2;
+DROP TABLESPACE test_spc;
 \! rm -rf /tmp/test_spc
