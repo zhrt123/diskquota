@@ -2,10 +2,10 @@ create temp table t1(i int);
 NOTICE:  Table doesn't have 'DISTRIBUTED BY' clause -- Using column named 'i' as the Greenplum Database data distribution key for this table.
 HINT:  The 'DISTRIBUTED BY' clause determines the distribution of data. Make sure column(s) chosen are the optimal data distribution key to minimize skew.
 insert into t1 select generate_series(1, 10000);
-select diskquota.relation_size_all_segs('t1', true);
- relation_size_all_segs 
-------------------------
-                 688128
+select diskquota.relation_size('t1', true);
+ relation_size 
+---------------
+        688128
 (1 row)
 
 select pg_table_size('t1');
@@ -18,10 +18,10 @@ create table t2(i int);
 NOTICE:  Table doesn't have 'DISTRIBUTED BY' clause -- Using column named 'i' as the Greenplum Database data distribution key for this table.
 HINT:  The 'DISTRIBUTED BY' clause determines the distribution of data. Make sure column(s) chosen are the optimal data distribution key to minimize skew.
 insert into t2 select generate_series(1, 10000);
-select diskquota.relation_size_all_segs('t2', false);
- relation_size_all_segs 
-------------------------
-                 688128
+select diskquota.relation_size('t2', false);
+ relation_size 
+---------------
+        688128
 (1 row)
 
 select pg_table_size('t2');
@@ -38,10 +38,10 @@ NOTICE:  tablespace "test_spc" does not exist, skipping
 CREATE TABLESPACE test_spc LOCATION '/tmp/test_spc';
 alter table t1 set tablespace test_spc;
 insert into t1 select generate_series(1, 10000);
-select diskquota.relation_size_all_segs('t1', true);
- relation_size_all_segs 
-------------------------
-                1081344
+select diskquota.relation_size('t1', true);
+ relation_size 
+---------------
+       1081344
 (1 row)
 
 select pg_table_size('t1');
@@ -52,10 +52,10 @@ select pg_table_size('t1');
 
 alter table t2 set tablespace test_spc;
 insert into t2 select generate_series(1, 10000);
-select diskquota.relation_size_all_segs('t2', false);
- relation_size_all_segs 
-------------------------
-                1081344
+select diskquota.relation_size('t2', false);
+ relation_size 
+---------------
+       1081344
 (1 row)
 
 select pg_table_size('t2');

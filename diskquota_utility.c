@@ -25,6 +25,7 @@
 #include "catalog/pg_collation.h"
 #include "catalog/pg_database.h"
 #include "catalog/pg_extension.h"
+#include "catalog/pg_tablespace.h"
 #include "catalog/pg_type.h"
 #include "commands/dbcommands.h"
 #include "commands/extension.h"
@@ -1108,11 +1109,11 @@ get_rel_oid_list(void)
 }
 
 /*
- * calculate size of (all fork of) a table in transaction
+ * calculate size of (all forks of) a relation in transaction
  * This function is following calculate_relation_size()
  */
-Size
-diskquota_get_relation_size_by_relfilenode(RelFileNodeBackend *rnode)
+static Size
+calculate_relation_size_all_forks(RelFileNodeBackend *rnode)
 {
     int64       totalsize = 0;
     ForkNumber  forkNum;
@@ -1153,6 +1154,7 @@ diskquota_get_relation_size_by_relfilenode(RelFileNodeBackend *rnode)
     }
 	PG_CATCH();
 	{
+		// TODO: Record the error message to pg_log
 		HOLD_INTERRUPTS();
 		FlushErrorState();
 		RESUME_INTERRUPTS();
@@ -1160,4 +1162,25 @@ diskquota_get_relation_size_by_relfilenode(RelFileNodeBackend *rnode)
 	PG_END_TRY();
 
     return totalsize;
+}
+
+PG_FUNCTION_INFO_V1(relation_size_local);
+
+Datum
+relation_size_local(PG_FUNCTION_ARGS)
+{
+    Oid reltablespace = PG_GETARG_OID(0);
+	Oid relfilenode = PG_GETARG_OID(1);
+    int backend = PG_GETARG_BOOL(2) ? -2 : -1;
+    RelFileNodeBackend rnode = {0};
+    Size size = 0;
+
+    rnode.node.dbNode = MyDatabaseId;
+    rnode.node.relNode = relfilenode;
+    rnode.node.spcNode = reltablespace ? reltablespace : DEFAULTTABLESPACE_OID;
+    rnode.backend = backend;
+
+    size = calculate_relation_size_all_forks(&rnode);
+
+	PG_RETURN_INT64(size);
 }

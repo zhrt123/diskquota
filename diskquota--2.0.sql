@@ -118,23 +118,25 @@ LANGUAGE C VOLATILE;
 SELECT diskquota.diskquota_start_worker();
 DROP FUNCTION diskquota.diskquota_start_worker();
 
--- unit test
 
-CREATE OR REPLACE FUNCTION diskquota.relation_size(oid, oid, boolean)
-RETURNS integer STRICT
-AS 'MODULE_PATHNAME', 'relation_size'
+CREATE OR REPLACE FUNCTION diskquota.relation_size_local(
+        reltablespace oid, 
+        relfilenode oid, 
+        is_temp boolean)
+RETURNS bigint STRICT
+AS 'MODULE_PATHNAME', 'relation_size_local'
 LANGUAGE C;
 
-create OR REPLACE FUNCTION diskquota.relation_size_all_segs(
-        relation_oid regclass,
-        is_temp bool) 
-returns int8 as
-$$
-select sum(size) from (
-        select diskquota.relation_size(reltablespace, relfilenode, is_temp) as size 
-        from gp_dist_random('pg_class') where oid = relation_oid
-        union all 
-        select diskquota.relation_size(reltablespace, relfilenode, is_temp) as size 
-        from pg_class where oid = relation_oid
-) as t
-$$ language sql;
+CREATE OR REPLACE FUNCTION diskquota.relation_size(
+        relation regclass,
+        is_temp boolean) 
+RETURNS bigint STRICT 
+AS $$
+SELECT sum(size)::bigint FROM (
+        SELECT diskquota.relation_size_local(reltablespace, relfilenode, is_temp) AS size 
+        FROM gp_dist_random('pg_class') WHERE oid = relation
+        UNION ALL 
+        SELECT diskquota.relation_size_local(reltablespace, relfilenode, is_temp) AS size 
+        FROM pg_class WHERE oid = relation
+) AS t
+$$ LANGUAGE SQL;
