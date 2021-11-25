@@ -1108,7 +1108,7 @@ get_rel_oid_list(void)
 }
 
 /*
- * calculate size of (one fork of) a table in transaction
+ * calculate size of (all fork of) a table in transaction
  * This function is following calculate_relation_size()
  */
 Size
