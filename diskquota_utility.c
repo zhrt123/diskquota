@@ -1207,44 +1207,44 @@ calculate_relation_size_all_forks(RelFileNodeBackend *rnode)
 	int64		size = 0;
 	char	   *relationpath;
 	char		pathname[MAXPGPATH];
-    unsigned int segcount = 0;
+	unsigned int segcount = 0;
 
 	PG_TRY();
 	{
-        for (forkNum = 0; forkNum <= MAX_FORKNUM; forkNum++)
-        {
-            relationpath = relpathbackend(rnode->node, rnode->backend, forkNum);
-            size = 0;
+		for (forkNum = 0; forkNum <= MAX_FORKNUM; forkNum++)
+		{
+			relationpath = relpathbackend(rnode->node, rnode->backend, forkNum);
+			size = 0;
 
-            for (segcount = 0;; segcount++)
-            {
-                struct stat fst;
+			for (segcount = 0;; segcount++)
+			{
+				struct stat fst;
 
-                CHECK_FOR_INTERRUPTS();
+				CHECK_FOR_INTERRUPTS();
 
-                if (segcount == 0)
-                    snprintf(pathname, MAXPGPATH, "%s",
+				if (segcount == 0)
+					snprintf(pathname, MAXPGPATH, "%s",
 							 relationpath);
-                else
-                    snprintf(pathname, MAXPGPATH, "%s.%u",
+				else
+					snprintf(pathname, MAXPGPATH, "%s.%u",
 							 relationpath, segcount);
 
-                if (stat(pathname, &fst) < 0)
-                {
-                    if (errno == ENOENT)
-                        break;
-                    else
-                        /* TODO: Do we need this? */
-                        ereport(ERROR,
+				if (stat(pathname, &fst) < 0)
+				{
+					if (errno == ENOENT)
+						break;
+					else
+						/* TODO: Do we need this? */
+						ereport(ERROR,
 								(errcode_for_file_access(),
 								 errmsg("[diskquota] could not stat file %s: %m", pathname)));
-                }
-                size += fst.st_size;
-            }
+				}
+				size += fst.st_size;
+			}
 
-            totalsize += size;
-        }
-    }
+			totalsize += size;
+		}
+	}
 	PG_CATCH();
 	{
 		/* TODO: Record the error message to pg_log */
@@ -1254,25 +1254,25 @@ calculate_relation_size_all_forks(RelFileNodeBackend *rnode)
 	}
 	PG_END_TRY();
 
-    return totalsize;
+	return totalsize;
 }
 
 Datum
 relation_size_local(PG_FUNCTION_ARGS)
 {
-    Oid reltablespace = PG_GETARG_OID(0);
-    Oid relfilenode = PG_GETARG_OID(1);
-    int backend = PG_GETARG_BOOL(2) ? -2 : -1;
-    RelFileNodeBackend rnode = {0};
-    int64 size = 0;
+	Oid reltablespace = PG_GETARG_OID(0);
+	Oid relfilenode = PG_GETARG_OID(1);
+	int backend = PG_GETARG_BOOL(2) ? -2 : -1;
+	RelFileNodeBackend rnode = {0};
+	int64 size = 0;
 
-    rnode.node.dbNode = MyDatabaseId;
-    rnode.node.relNode = relfilenode;
-    rnode.node.spcNode = OidIsValid(reltablespace) ?
+	rnode.node.dbNode = MyDatabaseId;
+	rnode.node.relNode = relfilenode;
+	rnode.node.spcNode = OidIsValid(reltablespace) ?
 		reltablespace : MyDatabaseTableSpace;
-    rnode.backend = backend;
+	rnode.backend = backend;
 
-    size = calculate_relation_size_all_forks(&rnode);
+	size = calculate_relation_size_all_forks(&rnode);
 
 	PG_RETURN_INT64(size);
 }
