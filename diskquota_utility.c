@@ -29,6 +29,7 @@
 #include "catalog/pg_extension.h"
 #include "catalog/pg_tablespace.h"
 #include "catalog/pg_type.h"
+#include "catalog/indexing.h"
 #include "commands/dbcommands.h"
 #include "commands/extension.h"
 #include "commands/tablespace.h"
@@ -1285,4 +1286,71 @@ relation_size_local(PG_FUNCTION_ARGS)
 	size = calculate_relation_size_all_forks(&rnode, relstorage);
 
 	PG_RETURN_INT64(size);
+}
+
+
+Relation
+diskquota_relation_open(Oid relid, LOCKMODE mode)
+{
+	Relation rel;
+	bool success_open = false;
+    int32 SavedInterruptHoldoffCount = InterruptHoldoffCount;
+
+	PG_TRY();
+	{
+		rel = relation_open(relid, mode);
+		success_open = true;
+	}
+	PG_CATCH();
+	{
+        InterruptHoldoffCount = SavedInterruptHoldoffCount;
+		HOLD_INTERRUPTS();
+		FlushErrorState();
+		RESUME_INTERRUPTS();
+	}
+	PG_END_TRY();
+	return success_open ? rel : NULL;
+}
+
+List*
+diskquota_get_index_list(Oid relid)
+{
+    Relation	indrel;
+	SysScanDesc indscan;
+	ScanKeyData skey;
+	HeapTuple	htup;
+	List	   *result = NIL;
+
+	/* Prepare to scan pg_index for entries having indrelid = this rel. */
+	ScanKeyInit(&skey,
+				Anum_pg_index_indrelid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				relid);
+
+	indrel = heap_open(IndexRelationId, AccessShareLock);
+	indscan = systable_beginscan(indrel, IndexIndrelidIndexId, true,
+								 NULL, 1, &skey);
+
+	while (HeapTupleIsValid(htup = systable_getnext(indscan)))
+	{
+		Form_pg_index index = (Form_pg_index) GETSTRUCT(htup);
+
+		/*
+		 * Ignore any indexes that are currently being dropped. This will
+		 * prevent them from being searched, inserted into, or considered in
+		 * HOT-safety decisions. It's unsafe to touch such an index at all
+		 * since its catalog entries could disappear at any instant.
+		 */
+		if (!IndexIsLive(index))
+			continue;
+
+		/* Add index's OID to result list in the proper order */
+		result = lappend_oid(result, index->indexrelid);
+	}
+
+	systable_endscan(indscan);
+
+	heap_close(indrel, AccessShareLock);
+
+	return result;
 }
