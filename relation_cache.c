@@ -9,6 +9,7 @@
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
 #include "utils/relfilenodemap.h"
+#include "utils/syscache.h"
 
 
 #include "relation_cache.h"
@@ -252,38 +253,13 @@ get_primary_table_oid(Oid relid)
 void
 remove_committed_relation_from_cache(void)
 {
-	HeapTuple	tuple;
-	HeapScanDesc relScan;
-	Relation	classRel;
-	Oid relid;
-	List *oid_list = NIL;
-	ListCell *l;
+	HASH_SEQ_STATUS iter = {0};
+	hash_seq_init(&iter, relation_cache);
 
-	classRel = heap_open(RelationRelationId, AccessShareLock);
-	relScan = heap_beginscan_catalog(classRel, 0, NULL);
-
-	while ((tuple = heap_getnext(relScan, ForwardScanDirection)) != NULL)
+	DiskQuotaRelationCacheEntry *entry = NULL;
+	while ((entry = hash_seq_search(&iter)) != NULL)
 	{
-		Form_pg_class classForm = (Form_pg_class) GETSTRUCT(tuple);
-
-		if (classForm->relkind != RELKIND_RELATION &&
-			classForm->relkind != RELKIND_MATVIEW)
-			continue;
-		relid = HeapTupleGetOid(tuple);
-		lappend_oid(oid_list, relid);
+		if (SearchSysCacheExists1(RELOID, entry->relid))
+			remove_cache_entry(entry->relid, InvalidOid);
 	}
-
-	heap_endscan(relScan);
-	heap_close(classRel, AccessShareLock);
-
-	/* use oid_list to avoid hold relation_cache_lock and AccessShareLock of pg_class */
-	LWLockAcquire(diskquota_locks.relation_cache_lock, LW_EXCLUSIVE);
-	foreach(l, oid_list)
-	{
-		relid = lfirst_oid(l);
-		remove_cache_entry(relid, InvalidOid);
-	}
-	LWLockRelease(diskquota_locks.relation_cache_lock);
-
-	list_free(oid_list);
 }
