@@ -1308,11 +1308,8 @@ diskquota_get_index_list(Oid relid)
 	SysScanDesc indscan;
 	ScanKeyData skey;
 	HeapTuple	htup;
-	List	   *result;
+	List		   *result = NIL;
 	Oid			oidIndex = InvalidOid;
-
-	result = NIL;
-	oidIndex = InvalidOid;
 
 	/* Prepare to scan pg_index for entries having indrelid = this rel. */
 	ScanKeyInit(&skey,
