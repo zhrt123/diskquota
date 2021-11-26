@@ -1326,7 +1326,7 @@ diskquota_get_index_list(Oid relid)
 		Form_pg_index index = (Form_pg_index) GETSTRUCT(htup);
 
 		/*
-		 * Ignore any indexes that are currently being dropped.  This will
+		 * Ignore any indexes that are currently being dropped. This will
 		 * prevent them from being searched, inserted into, or considered in
 		 * HOT-safety decisions.  It's unsafe to touch such an index at all
 		 * since its catalog entries could disappear at any instant.
