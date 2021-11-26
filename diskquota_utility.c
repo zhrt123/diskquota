@@ -1328,7 +1328,7 @@ diskquota_get_index_list(Oid relid)
 		/*
 		 * Ignore any indexes that are currently being dropped. This will
 		 * prevent them from being searched, inserted into, or considered in
-		 * HOT-safety decisions.  It's unsafe to touch such an index at all
+		 * HOT-safety decisions. It's unsafe to touch such an index at all
 		 * since its catalog entries could disappear at any instant.
 		 */
 		if (!IndexIsLive(index))
