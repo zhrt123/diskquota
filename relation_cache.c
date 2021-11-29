@@ -9,6 +9,8 @@
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
 #include "utils/relfilenodemap.h"
+#include "utils/array.h"
+#include "funcapi.h"
 
 
 #include "relation_cache.h"
@@ -18,6 +20,8 @@ HTAB	   *relation_cache = NULL;
 HTAB	   *relid_cache = NULL;
 
 static void update_relation_entry(Oid relid, DiskQuotaRelationCacheEntry *relation_entry, DiskQuotaRelidCacheEntry *relid_entry);
+
+PG_FUNCTION_INFO_V1(show_relation_cache);
 
 void
 init_shm_worker_relation_cache(void)
@@ -144,6 +148,7 @@ update_relation_entry(Oid relid, DiskQuotaRelationCacheEntry *relation_entry, Di
 		relation_entry->rnode.backend = rel->rd_backend;
 		relation_entry->owneroid = rel->rd_rel->relowner;
 		relation_entry->namespaceoid = rel->rd_rel->relnamespace;
+		relation_entry->relstorage = rel->rd_rel->relstorage;
 	}
 
 	if (relid_entry)
@@ -270,20 +275,128 @@ remove_committed_relation_from_cache(void)
 			classForm->relkind != RELKIND_MATVIEW)
 			continue;
 		relid = HeapTupleGetOid(tuple);
-		lappend_oid(oid_list, relid);
+		oid_list = lappend_oid(oid_list, relid);
 	}
 
 	heap_endscan(relScan);
 	heap_close(classRel, AccessShareLock);
 
 	/* use oid_list to avoid hold relation_cache_lock and AccessShareLock of pg_class */
-	LWLockAcquire(diskquota_locks.relation_cache_lock, LW_EXCLUSIVE);
 	foreach(l, oid_list)
 	{
 		relid = lfirst_oid(l);
 		remove_cache_entry(relid, InvalidOid);
 	}
-	LWLockRelease(diskquota_locks.relation_cache_lock);
 
 	list_free(oid_list);
+}
+
+Datum
+show_relation_cache(PG_FUNCTION_ARGS)
+{
+	DiskQuotaRelationCacheEntry *entry;
+	FuncCallContext			   *funcctx;
+	struct RelationCacheCtx {
+		HASH_SEQ_STATUS			iter;
+		HTAB				   *relation_cache;
+	} *relation_cache_ctx;
+
+	if (SRF_IS_FIRSTCALL())
+	{
+		TupleDesc					tupdesc;
+		MemoryContext				oldcontext;
+		HASHCTL						hashctl;
+		HASH_SEQ_STATUS				hash_seq;
+
+		/* Create a function context for cross-call persistence. */
+		funcctx = SRF_FIRSTCALL_INIT();
+
+		/* Switch to memory context appropriate for multiple function calls */
+		oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
+
+		tupdesc = CreateTemplateTupleDesc(11, false /*hasoid*/);
+		TupleDescInitEntry(tupdesc, (AttrNumber) 1, "RELID", OIDOID, -1 /*typmod*/, 0 /*attdim*/);
+		TupleDescInitEntry(tupdesc, (AttrNumber) 2, "PRIMARY_TABLE_OID", OIDOID, -1 /*typmod*/, 0 /*attdim*/);
+		TupleDescInitEntry(tupdesc, (AttrNumber) 3, "AUXREL_NUM", INT4OID, -1 /*typmod*/, 0 /*attdim*/);
+		TupleDescInitEntry(tupdesc, (AttrNumber) 4, "OWNEROID", OIDOID, -1 /*typmod*/, 0 /*attdim*/);
+		TupleDescInitEntry(tupdesc, (AttrNumber) 5, "NAMESPACEOID", OIDOID, -1 /*typmod*/, 0 /*attdim*/);
+		TupleDescInitEntry(tupdesc, (AttrNumber) 6, "BACKENDID", INT4OID, -1 /*typmod*/, 0 /*attdim*/);
+		TupleDescInitEntry(tupdesc, (AttrNumber) 7, "SPCNODE", OIDOID, -1 /*typmod*/, 0 /*attdim*/);
+		TupleDescInitEntry(tupdesc, (AttrNumber) 8, "DBNODE", OIDOID, -1 /*typmod*/, 0 /*attdim*/);
+		TupleDescInitEntry(tupdesc, (AttrNumber) 9, "RELNODE", OIDOID, -1 /*typmod*/, 0 /*attdim*/);
+		TupleDescInitEntry(tupdesc, (AttrNumber) 10, "RELSTORAGE", CHAROID, -1 /*typmod*/, 0 /*attdim*/);
+		TupleDescInitEntry(tupdesc, (AttrNumber) 11, "AUXREL_OID", OIDARRAYOID, -1 /*typmod*/, 0 /*attdim*/);
+
+		funcctx->tuple_desc = BlessTupleDesc(tupdesc);
+
+		/* Create a local hash table and fill it with entries from shared memory. */
+		memset(&hashctl, 0, sizeof(hashctl));
+		hashctl.keysize = sizeof(Oid);
+		hashctl.entrysize = sizeof(DiskQuotaRelationCacheEntry);
+		hashctl.hcxt = CurrentMemoryContext;
+		hashctl.hash = tag_hash;
+
+		relation_cache_ctx = (struct RelationCacheCtx *) palloc(sizeof(struct RelationCacheCtx));
+		relation_cache_ctx->relation_cache = hash_create("relation_cache_ctx->relation_cache",
+											 1024, &hashctl,
+											 HASH_ELEM | HASH_CONTEXT | HASH_FUNCTION);
+
+		LWLockAcquire(diskquota_locks.relation_cache_lock, LW_SHARED);
+		hash_seq_init(&hash_seq, relation_cache);
+		while ((entry = (DiskQuotaRelationCacheEntry *) hash_seq_search(&hash_seq)) != NULL)
+		{
+			DiskQuotaRelationCacheEntry *local_entry = hash_search(relation_cache_ctx->relation_cache,
+											   					   &entry->relid, HASH_ENTER_NULL, NULL);
+			if (local_entry)
+			{
+				memcpy(local_entry, entry, sizeof(DiskQuotaRelationCacheEntry));
+			}
+		}
+		LWLockRelease(diskquota_locks.relation_cache_lock);
+
+		/* Setup first calling context. */
+		hash_seq_init(&(relation_cache_ctx->iter), relation_cache_ctx->relation_cache);
+		funcctx->user_fctx = (void *) relation_cache_ctx;
+		MemoryContextSwitchTo(oldcontext);
+	}
+
+	funcctx = SRF_PERCALL_SETUP();
+	relation_cache_ctx = (struct RelationCacheCtx *) funcctx->user_fctx;
+
+	while ((entry = (DiskQuotaRelationCacheEntry *)hash_seq_search(&(relation_cache_ctx->iter))) != NULL)
+	{
+		Datum			result;
+		Datum			values[11];
+		Datum			auxrel_oid[10];
+		bool			nulls[11];
+		HeapTuple		tuple;
+		ArrayType 	   *array;
+		int				i;
+
+		for (i = 0; i < entry->auxrel_num; i++)
+		{
+			auxrel_oid[i] = ObjectIdGetDatum(entry->auxrel_oid[i]);
+		}
+		array = construct_array(auxrel_oid, entry->auxrel_num, OIDOID, sizeof(Oid), true, 'i');
+
+		values[0] = ObjectIdGetDatum(entry->relid);
+		values[1] = ObjectIdGetDatum(entry->primary_table_relid);
+		values[2] = Int32GetDatum(entry->auxrel_num);
+		values[3] = ObjectIdGetDatum(entry->owneroid);
+		values[4] = ObjectIdGetDatum(entry->namespaceoid);
+		values[5] = Int32GetDatum(entry->rnode.backend);
+		values[6] = ObjectIdGetDatum(entry->rnode.node.spcNode);
+		values[7] = ObjectIdGetDatum(entry->rnode.node.dbNode);
+		values[8] = ObjectIdGetDatum(entry->rnode.node.relNode);
+		values[9] = CharGetDatum(entry->relstorage);
+		values[10] = PointerGetDatum(array);
+
+		memset(nulls, false, sizeof(nulls));
+		tuple = heap_form_tuple(funcctx->tuple_desc, values, nulls);
+		result = HeapTupleGetDatum(tuple);
+
+		SRF_RETURN_NEXT(funcctx, result);
+	}
+
+	SRF_RETURN_DONE(funcctx);
 }
