@@ -1,25 +1,53 @@
+-- heap table
 begin;
 create table t(i int);
 insert into t select generate_series(1, 100000);
 
-WITH table_size AS (
-    SELECT diskquota.diskquota_fetch_table_stat(1, ARRAY['t'::regclass]) AS a
-    FROM  gp_dist_random('gp_id')
-)
-SELECT (a).* FROM table_size order by table_size;
+select count(*) from diskquota.show_relation_cache_all_seg();
+commit;
 
-select pg_table_size('t') as ts from gp_dist_random('gp_id') order by ts;
-abort;
+select pg_sleep(5);
+select count(*) from diskquota.show_relation_cache_all_seg();
+drop table t;
 
+-- toast table
 begin;
 create table t(t text);
 insert into t select array(select * from generate_series(1,1000)) from generate_series(1, 1000);
 
-WITH table_size AS (
-    SELECT diskquota.diskquota_fetch_table_stat(1, ARRAY['t'::regclass]) AS a
-    FROM  gp_dist_random('gp_id')
-)
-SELECT (a).* FROM table_size order by table_size;
+select count(*) from diskquota.show_relation_cache_all_seg();
 
-select pg_table_size('t') as ts from gp_dist_random('gp_id') order by ts;
-abort;
+select diskquota.check_relation_cache();
+commit;
+
+select pg_sleep(5);
+select count(*) from diskquota.show_relation_cache_all_seg();
+drop table t;
+
+-- AO table
+begin;
+create table t(a int, b text) with(appendonly=true);
+insert into t select generate_series(1,1000) as a, repeat('a', 1000) as b;
+
+select count(*) from diskquota.show_relation_cache_all_seg();
+
+select diskquota.check_relation_cache();
+commit;
+
+select pg_sleep(5);
+select count(*) from diskquota.show_relation_cache_all_seg();
+drop table t;
+
+-- AOCS table
+begin;
+create table t(a int, b text) with(appendonly=true, orientation=column);
+insert into t select generate_series(1,1000) as a, repeat('a', 1000) as b;
+
+select count(*) from diskquota.show_relation_cache_all_seg();
+
+select diskquota.check_relation_cache();
+commit;
+
+select pg_sleep(5);
+select count(*) from diskquota.show_relation_cache_all_seg();
+drop table t;

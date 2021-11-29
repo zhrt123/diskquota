@@ -150,3 +150,35 @@ SELECT sum(size)::bigint FROM (
         FROM pg_class WHERE oid = relation
 ) AS t
 $$ LANGUAGE SQL;
+
+
+CREATE TYPE diskquota._relation_cache_detail AS
+  (RELID oid, PRIMARY_TABLE_OID oid, AUXREL_NUM int,
+   OWNEROID oid, NAMESPACEOID oid, BACKENDID int, SPCNODE oid, DBNODE oid, RELNODE oid, RELSTORAGE "char", AUXREL_OID oid[]);
+
+CREATE OR REPLACE FUNCTION diskquota.show_relation_cache()
+RETURNS setof diskquota._relation_cache_detail
+AS 'MODULE_PATHNAME', 'show_relation_cache'
+LANGUAGE C;
+
+CREATE OR REPLACE FUNCTION diskquota.show_relation_cache_all_seg()
+RETURNS setof diskquota._relation_cache_detail 
+as $$
+WITH relation_cache AS (
+    SELECT diskquota.show_relation_cache() AS a
+    FROM  gp_dist_random('gp_id')
+)
+SELECT (a).* FROM relation_cache;
+$$ LANGUAGE SQL;
+
+CREATE OR REPLACE FUNCTION diskquota.check_relation_cache()
+RETURNS boolean
+as $$
+declare t1 oid[];
+declare t2 oid[];
+begin
+t1 := (select array_agg(distinct((a).relid)) from diskquota.show_relation_cache_all_seg() as a where (a).relid != (a).primary_table_oid);
+t2 := (select distinct((a).auxrel_oid) from diskquota.show_relation_cache_all_seg() as a where (a).relid = (a).primary_table_oid);
+return t1 = t2;
+end;
+$$ LANGUAGE plpgsql;
