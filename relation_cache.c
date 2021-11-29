@@ -225,6 +225,8 @@ get_primary_table_oid_by_relname(Oid relid)
 				return atoi(&relname[9]);
 			else if (strncmp(relname, "pg_aovisimap", 12) == 0)
 				return atoi(&relname[13]);
+			else if (strncmp(relname, "pg_aocsseg", 10) == 0)
+				return atoi(&relname[11]);
 		}
 		break;
 	}
