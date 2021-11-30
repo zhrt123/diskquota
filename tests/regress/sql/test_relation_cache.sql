@@ -1,3 +1,16 @@
+-- init
+CREATE OR REPLACE FUNCTION diskquota.check_relation_cache()
+RETURNS boolean
+as $$
+declare t1 oid[];
+declare t2 oid[];
+begin
+t1 := (select array_agg(distinct((a).relid)) from diskquota.show_relation_cache_all_seg() as a where (a).relid != (a).primary_table_oid);
+t2 := (select distinct((a).auxrel_oid) from diskquota.show_relation_cache_all_seg() as a where (a).relid = (a).primary_table_oid);
+return t1 = t2;
+end;
+$$ LANGUAGE plpgsql;
+
 -- heap table
 begin;
 create table t(i int);
@@ -51,3 +64,5 @@ commit;
 select pg_sleep(5);
 select count(*) from diskquota.show_relation_cache_all_seg();
 drop table t;
+
+DROP FUNCTION diskquota.check_relation_cache();
