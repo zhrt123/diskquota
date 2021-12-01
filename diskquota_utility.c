@@ -1288,7 +1288,6 @@ relation_size_local(PG_FUNCTION_ARGS)
 	PG_RETURN_INT64(size);
 }
 
-
 Relation
 diskquota_relation_open(Oid relid, LOCKMODE mode)
 {

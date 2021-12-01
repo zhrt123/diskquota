@@ -13,7 +13,6 @@
 #include "utils/array.h"
 #include "funcapi.h"
 
-
 #include "relation_cache.h"
 #include "diskquota.h"
 
@@ -197,7 +196,7 @@ update_relation_cache(Oid relid)
 }
 
 static Oid
-get_primary_table_oid_by_relname(Oid relid)
+parse_primar_table_oid(Oid relid)
 {
 	Relation rel;
 	Oid namespace;
@@ -240,7 +239,7 @@ get_primary_table_oid(Oid relid)
 	Oid cached_prelid = relid;
 	Oid parsed_prelid;
 
-	parsed_prelid = get_primary_table_oid_by_relname(relid);
+	parsed_prelid = parse_primary_table_oid(relid);
 	if (OidIsValid(parsed_prelid))
 	{
 		return parsed_prelid;

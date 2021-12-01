@@ -6,7 +6,6 @@
 #include "storage/lock.h"
 #include "postgres.h"
 
-
 typedef struct DiskQuotaRelationCacheEntry
 {
 	Oid 				relid;
@@ -35,6 +34,5 @@ extern void update_relation_cache(Oid relid);
 extern Oid get_primary_table_oid(Oid relid);
 extern void remove_committed_relation_from_cache(void);
 
-#define atooid(x)  ((Oid) strtoul((x), NULL, 10))
 
 #endif

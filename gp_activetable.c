@@ -176,12 +176,13 @@ active_table_hook_smgrunlink(RelFileNodeBackend rnode)
 	remove_cache_entry(InvalidOid, rnode.node.relNode);
 }
 
-static void object_access_hook_QuotaStmt(ObjectAccessType access, Oid classId, Oid objectId, int subId, void *arg)
+static void
+object_access_hook_QuotaStmt(ObjectAccessType access, Oid classId, Oid objectId, int subId, void *arg)
 {
 	if (prev_object_access_hook)
 		(*prev_object_access_hook)(access, classId, objectId, subId, arg);
 
-	// TODO: do we need to use "and" instead of "or"?
+	/* TODO: do we need to use "&&" instead of "||"? */
 	if (classId != RelationRelationId || subId != 0)
 	{
 		return;
@@ -211,9 +212,11 @@ report_relation_cache_helper(Oid relid)
 		return;
 	}
 
-	/* do not collect active table info when the database is not under monitoring.
+	/*
+	 * Do not collect active table info when the database is not under monitoring.
 	 * this operation is read-only and does not require absolutely exact.
-	 * read the cache with out shared lock */
+	 * read the cache with out shared lock.
+	 */
 	hash_search(monitoring_dbid_cache, &MyDatabaseId, HASH_FIND, &found);
 	if (!found)
 	{

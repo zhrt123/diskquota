@@ -151,7 +151,6 @@ SELECT sum(size)::bigint FROM (
 ) AS t
 $$ LANGUAGE SQL;
 
-
 CREATE TYPE diskquota.relation_cache_detail AS
   (RELID oid, PRIMARY_TABLE_OID oid, AUXREL_NUM int,
    OWNEROID oid, NAMESPACEOID oid, BACKENDID int, SPCNODE oid, DBNODE oid, RELNODE oid, RELSTORAGE "char", AUXREL_OID oid[]);
