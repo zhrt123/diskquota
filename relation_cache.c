@@ -196,7 +196,7 @@ update_relation_cache(Oid relid)
 }
 
 static Oid
-parse_primar_table_oid(Oid relid)
+parse_primary_table_oid(Oid relid)
 {
 	Relation rel;
 	Oid namespace;
