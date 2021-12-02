@@ -1,0 +1,112 @@
+-- temp table
+begin;
+CREATE TEMP TABLE t1(i int);
+NOTICE:  Table doesn't have 'DISTRIBUTED BY' clause -- Using column named 'i' as the Greenplum Database data distribution key for this table.
+HINT:  The 'DISTRIBUTED BY' clause determines the distribution of data. Make sure column(s) chosen are the optimal data distribution key to minimize skew.
+INSERT INTO t1 SELECT generate_series(1, 100000);
+SELECT pg_sleep(5);
+ pg_sleep 
+----------
+ 
+(1 row)
+
+SELECT tableid::regclass, size, segid from diskquota.table_size where tableid = 't1'::regclass order by segid desc;SELECT pg_table_size('t1');
+ tableid |  size   | segid 
+---------+---------+-------
+ t1      | 1310720 |     2
+ t1      | 1310720 |     1
+ t1      | 1310720 |     0
+ t1      | 3932160 |    -1
+(4 rows)
+
+ pg_table_size 
+---------------
+       3932160
+(1 row)
+
+commit;
+drop table t1;
+-- heap table
+begin;
+CREATE TABLE t2(i int);
+NOTICE:  Table doesn't have 'DISTRIBUTED BY' clause -- Using column named 'i' as the Greenplum Database data distribution key for this table.
+HINT:  The 'DISTRIBUTED BY' clause determines the distribution of data. Make sure column(s) chosen are the optimal data distribution key to minimize skew.
+INSERT INTO t2 SELECT generate_series(1, 100000);
+SELECT pg_sleep(5);
+ pg_sleep 
+----------
+ 
+(1 row)
+
+SELECT tableid::regclass, size, segid from diskquota.table_size where tableid = 't2'::regclass order by segid desc;SELECT pg_table_size('t2');
+ tableid |  size   | segid 
+---------+---------+-------
+ t2      | 1310720 |     2
+ t2      | 1310720 |     1
+ t2      | 1310720 |     0
+ t2      | 3932160 |    -1
+(4 rows)
+
+ pg_table_size 
+---------------
+       3932160
+(1 row)
+
+commit;
+drop table t2;
+-- AO table
+begin;
+CREATE TABLE ao (i int) WITH (appendonly=true);
+NOTICE:  Table doesn't have 'DISTRIBUTED BY' clause -- Using column named 'i' as the Greenplum Database data distribution key for this table.
+HINT:  The 'DISTRIBUTED BY' clause determines the distribution of data. Make sure column(s) chosen are the optimal data distribution key to minimize skew.
+INSERT INTO ao SELECT generate_series(1, 100000);
+SELECT pg_sleep(5);
+ pg_sleep 
+----------
+ 
+(1 row)
+
+SELECT tableid::regclass, size, segid from diskquota.table_size where tableid = 'ao'::regclass order by segid desc;SELECT pg_table_size('ao');
+ tableid |  size   | segid 
+---------+---------+-------
+ ao      |  398192 |     2
+ ao      |  399352 |     1
+ ao      |  400704 |     0
+ ao      | 1263784 |    -1
+(4 rows)
+
+ pg_table_size 
+---------------
+       1263784
+(1 row)
+
+commit;
+DROP TABLE ao;
+-- AOSC table
+begin;
+CREATE TABLE aocs (i int, t text) WITH (appendonly=true, orientation=column);
+NOTICE:  Table doesn't have 'DISTRIBUTED BY' clause -- Using column named 'i' as the Greenplum Database data distribution key for this table.
+HINT:  The 'DISTRIBUTED BY' clause determines the distribution of data. Make sure column(s) chosen are the optimal data distribution key to minimize skew.
+INSERT INTO aocs SELECT i, repeat('a', 1000) FROM generate_series(1, 10000) AS i;
+SELECT pg_sleep(5);
+ pg_sleep 
+----------
+ 
+(1 row)
+
+SELECT tableid::regclass, size, segid from diskquota.table_size where tableid = 'aocs'::regclass order by segid desc;SELECT pg_table_size('aocs');
+ tableid |   size   | segid 
+---------+----------+-------
+ aocs    |  3375408 |     2
+ aocs    |  3514672 |     1
+ aocs    |  3497528 |     0
+ aocs    | 10485912 |    -1
+(4 rows)
+
+ pg_table_size 
+---------------
+      10485912
+(1 row)
+
+commit;
+DROP TABLE aocs;

@@ -405,3 +405,169 @@ show_relation_cache(PG_FUNCTION_ARGS)
 
 	SRF_RETURN_DONE(funcctx);
 }
+
+static void
+add_auxrelation_to_relation_entry(Oid relid, DiskQuotaRelationCacheEntry *pentry)
+{
+	List 		*index_oids;
+	ListCell	*cell;
+
+	add_auxrelid_to_relation_entry(pentry, relid);
+
+	index_oids = diskquota_get_index_list(relid);
+	foreach(cell, index_oids)
+	{
+		Oid	idxrelid = lfirst_oid(cell);
+		add_auxrelid_to_relation_entry(pentry, idxrelid);
+	}
+	list_free(index_oids);
+}
+
+static void
+get_relation_entry_from_pg_class(Oid relid, DiskQuotaRelationCacheEntry* relation_entry)
+{
+	Relation rel;
+
+	rel = diskquota_relation_open(relid, NoLock);
+	if (rel == NULL || relation_entry == NULL)
+	{
+		return;
+	}
+
+	relation_entry->relid = relid;
+	relation_entry->primary_table_relid = relid;
+	relation_entry->owneroid = rel->rd_rel->relowner;
+	relation_entry->namespaceoid = rel->rd_rel->relnamespace;
+	relation_entry->relstorage = rel->rd_rel->relstorage;
+	relation_entry->rnode.node = rel->rd_node;
+	relation_entry->rnode.backend = rel->rd_backend;
+
+	// toast table
+	if (OidIsValid(rel->rd_rel->reltoastrelid))
+	{
+		add_auxrelation_to_relation_entry(rel->rd_rel->reltoastrelid, relation_entry);
+	}
+
+	// ao table
+	if (RelationIsAppendOptimized(rel) && rel->rd_appendonly != NULL)
+	{
+		if (OidIsValid(rel->rd_appendonly->segrelid))
+		{
+			add_auxrelation_to_relation_entry(rel->rd_appendonly->segrelid, relation_entry);
+		}
+
+		/* block directory may not exist, post upgrade or new table that never has indexes */
+		if (OidIsValid(rel->rd_appendonly->blkdirrelid))
+		{
+			add_auxrelation_to_relation_entry(rel->rd_appendonly->blkdirrelid, relation_entry);
+		}
+		if (OidIsValid(rel->rd_appendonly->visimaprelid))
+		{
+			add_auxrelation_to_relation_entry(rel->rd_appendonly->visimaprelid, relation_entry);
+		}
+	}
+	
+	relation_close(rel, NoLock);
+}
+
+static void
+get_relation_entry(Oid relid, DiskQuotaRelationCacheEntry* entry)
+{
+	DiskQuotaRelationCacheEntry* tentry;
+
+	LWLockAcquire(diskquota_locks.relation_cache_lock, LW_SHARED);
+	tentry = hash_search(relation_cache, &relid, HASH_FIND, NULL);
+	if (tentry)
+	{
+		memcpy(entry, tentry, sizeof(DiskQuotaRelationCacheEntry));
+		LWLockRelease(diskquota_locks.relation_cache_lock);
+		return;
+	}
+	LWLockRelease(diskquota_locks.relation_cache_lock);
+	
+	get_relation_entry_from_pg_class(relid, entry);
+}
+
+static void
+get_relfilenode_by_relid(Oid relid, RelFileNodeBackend *rnode, char *relstorage)
+{
+	DiskQuotaRelationCacheEntry *relation_cache_entry;
+	Relation rel;
+	
+	memset(rnode, 0, sizeof(RelFileNodeBackend));
+	rel = try_relation_open(relid, NoLock, false);
+	if (rel)
+	{
+		rnode->node = rel->rd_node;
+		rnode->backend = rel->rd_backend;
+		*relstorage = rel->rd_rel->relstorage;
+		relation_close(rel, NoLock);
+		
+		remove_cache_entry(relid, InvalidOid);
+		return;
+	}
+
+	LWLockAcquire(diskquota_locks.relation_cache_lock, LW_SHARED);
+	relation_cache_entry = hash_search(relation_cache, &relid, HASH_FIND, NULL);
+	if (relation_cache_entry)
+	{
+		*rnode = relation_cache_entry->rnode;
+		*relstorage = relation_cache_entry->relstorage;
+	}
+	LWLockRelease(diskquota_locks.relation_cache_lock);
+
+	return;
+}
+
+
+static Size
+do_calculate_table_size(DiskQuotaRelationCacheEntry *entry)
+{
+	Size tablesize = 0;
+	RelFileNodeBackend rnode;
+	char relstorage = 0;
+	Oid subrelid;
+	int i;
+
+	get_relfilenode_by_relid(entry->relid, &rnode, &relstorage);
+	tablesize += calculate_relation_size_all_forks(&rnode, relstorage);
+
+	for (i = 0; i < entry->auxrel_num; i++)
+	{
+		subrelid = entry->auxrel_oid[i];
+		get_relfilenode_by_relid(subrelid, &rnode, &relstorage);
+		tablesize += calculate_relation_size_all_forks(&rnode, relstorage);
+	}
+	return tablesize;
+}
+
+Size
+calculate_table_size(Oid relid)
+{
+    DiskQuotaRelationCacheEntry entry = {0};
+
+	get_relation_entry(relid, &entry);
+
+	return do_calculate_table_size(&entry);
+}
+
+void
+remove_cache_entry_recursion_wio_lock(Oid relid)
+{
+	DiskQuotaRelationCacheEntry *relation_entry;
+	int i;
+
+	if (OidIsValid(relid))
+	{
+		relation_entry = hash_search(relation_cache, &relid, HASH_FIND, NULL);
+		if (relation_entry)
+		{
+			for (i = 0; i < relation_entry->auxrel_num; i++)
+			{
+				remove_cache_entry_recursion_wio_lock(relation_entry->auxrel_oid[i]);
+			}
+			hash_search(relid_cache, &relation_entry->rnode.node.relNode, HASH_REMOVE, NULL);
+			hash_search(relation_cache, &relid, HASH_REMOVE, NULL);
+		}
+	}
+}

@@ -121,4 +121,5 @@ extern void truncateStringInfo(StringInfo str, int nchars);
 extern List *get_rel_oid_list(void);
 extern int64 calculate_relation_size_all_forks(RelFileNodeBackend *rnode, char relstorage);
 extern Relation diskquota_relation_open(Oid relid, LOCKMODE mode);
+extern List* diskquota_get_index_list(Oid relid);
 #endif
