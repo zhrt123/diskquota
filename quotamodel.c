@@ -1630,97 +1630,6 @@ export_exceeded_error(GlobalBlackMapEntry *entry, bool skip_name)
 }
 
 /*
- * The order of the returned index list is not guaranteed, Don't
- * apply the relation_open() to the returned list, or deadlock
- * may happen.
- */
-static List*
-GetIndexOidListByRelid(Oid reloid)
-{
-	List		   *result = NIL;
-	ScanKeyData		skey;
-	SysScanDesc		indscan;
-	Relation		indrel;
-	HeapTuple		htup;
-
-	ScanKeyInit(&skey, Anum_pg_index_indrelid,
-				BTEqualStrategyNumber, F_OIDEQ, reloid);
-	indrel = heap_open(IndexRelationId, AccessShareLock);
-	indscan = systable_beginscan(indrel, IndexIndrelidIndexId,
-								 true /*indexOk*/, NULL /*snapshot*/,
-								 1 /*nkeys*/, &skey);
-	while (HeapTupleIsValid(htup = systable_getnext(indscan)))
-	{
-		Form_pg_index	index = (Form_pg_index) GETSTRUCT(htup);
-
-		if (!IndexIsLive(index))
-			continue;
-
-		result = lappend_oid(result, index->indexrelid);
-	}
-	systable_endscan(indscan);
-	heap_close(indrel, AccessShareLock);
-
-	return result;
-}
-
-/*
- * Get auxiliary relations oid by searching the pg_appendonly table.
- */
-static void
-GetAppendOnlyEntryAuxOidListByRelid(Oid reloid, Oid *segrelid,
-									Oid *blkdirrelid, Oid *visimaprelid)
-{
-	ScanKeyData			skey;
-	SysScanDesc			scan;
-	TupleDesc			tupDesc;
-	Relation			aorel;
-	HeapTuple			htup;
-	Datum  				auxoid;
-	bool				isnull;
-
-	ScanKeyInit(&skey, Anum_pg_appendonly_relid,
-				BTEqualStrategyNumber, F_OIDEQ, reloid);
-	aorel = heap_open(AppendOnlyRelationId, AccessShareLock);
-	tupDesc = RelationGetDescr(aorel);
-	scan = systable_beginscan(aorel, AppendOnlyRelidIndexId,
-							  true /*indexOk*/, NULL /*snapshot*/,
-							  1 /*nkeys*/, &skey);
-	while (HeapTupleIsValid(htup = systable_getnext(scan)))
-	{
-		if (segrelid)
-		{
-			auxoid = heap_getattr(htup,
-								  Anum_pg_appendonly_segrelid,
-								  tupDesc, &isnull);
-			if (!isnull)
-				*segrelid = DatumGetObjectId(auxoid);
-		}
-
-		if (blkdirrelid)
-		{
-			auxoid = heap_getattr(htup,
-								  Anum_pg_appendonly_blkdirrelid,
-								  tupDesc, &isnull);
-			if (!isnull)
-				*blkdirrelid = DatumGetObjectId(auxoid);
-		}
-
-		if (visimaprelid)
-		{
-			auxoid = heap_getattr(htup,
-								  Anum_pg_appendonly_visimaprelid,
-								  tupDesc, &isnull);
-			if (!isnull)
-				*visimaprelid = DatumGetObjectId(auxoid);
-		}
-	}
-
-	systable_endscan(scan);
-	heap_close(aorel, AccessShareLock);
-}
-
-/*
  * refresh_blackmap() takes two arguments.
  * The first argument is an array of blackmap entries on QD.
  * The second argument is an array of active relations' oid.
@@ -1888,7 +1797,7 @@ refresh_blackmap(PG_FUNCTION_ARGS)
 					if (OidIsValid(toastrelid))
 					{
 						oid_list = lappend_oid(oid_list, toastrelid);
-						oid_list = list_concat(oid_list, GetIndexOidListByRelid(toastrelid));
+						oid_list = list_concat(oid_list, diskquota_get_index_list(toastrelid));
 					}
 
 					/* Append ao auxiliary relations and their indexes to the oid_list if any. */
@@ -1897,17 +1806,17 @@ refresh_blackmap(PG_FUNCTION_ARGS)
 					if (OidIsValid(aosegrelid))
 					{
 						oid_list = lappend_oid(oid_list, aosegrelid);
-						oid_list = list_concat(oid_list, GetIndexOidListByRelid(aosegrelid));
+						oid_list = list_concat(oid_list, diskquota_get_index_list(aosegrelid));
 					}
 					if (OidIsValid(aoblkdirrelid))
 					{
 						oid_list = lappend_oid(oid_list, aoblkdirrelid);
-						oid_list = list_concat(oid_list, GetIndexOidListByRelid(aoblkdirrelid));
+						oid_list = list_concat(oid_list, diskquota_get_index_list(aoblkdirrelid));
 					}
 					if (OidIsValid(aovisimaprelid))
 					{
 						oid_list = lappend_oid(oid_list, aovisimaprelid);
-						oid_list = list_concat(oid_list, GetIndexOidListByRelid(aovisimaprelid));
+						oid_list = list_concat(oid_list, diskquota_get_index_list(aovisimaprelid));
 					}
 
 					/* Iterate over the oid_list and add their relfilenodes to the blackmap. */

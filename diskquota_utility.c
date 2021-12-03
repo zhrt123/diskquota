@@ -1175,14 +1175,9 @@ get_rel_oid_list(void)
 		oid = DatumGetObjectId(SPI_getbinval(tup,tupdesc, 1, &isnull));
 		if (!isnull)
 		{
-			Relation	relation;
 			List	   	*indexIds;
-			relation = try_relation_open(oid, AccessShareLock, false);
-			if (!relation)
-				continue;
-
 			oidlist = lappend_oid(oidlist, oid);
-			indexIds = RelationGetIndexList(relation);
+			indexIds = diskquota_get_index_list(oid);
 			if (indexIds != NIL )
 			{
 				foreach(l, indexIds)
@@ -1190,7 +1185,6 @@ get_rel_oid_list(void)
 					oidlist = lappend_oid(oidlist, lfirst_oid(l));
 				}
 			}
-		    relation_close(relation, AccessShareLock);
 			list_free(indexIds);
 		}
 	}
@@ -1351,4 +1345,59 @@ diskquota_get_index_list(Oid relid)
 	heap_close(indrel, AccessShareLock);
 
 	return result;
+}
+
+/*
+ * Get auxiliary relations oid by searching the pg_appendonly table.
+ */
+void
+GetAppendOnlyEntryAuxOidListByRelid(Oid reloid, Oid *segrelid, Oid *blkdirrelid, Oid *visimaprelid)
+{
+	ScanKeyData			skey;
+	SysScanDesc			scan;
+	TupleDesc			tupDesc;
+	Relation			aorel;
+	HeapTuple			htup;
+	Datum  				auxoid;
+	bool				isnull;
+
+	ScanKeyInit(&skey, Anum_pg_appendonly_relid,
+				BTEqualStrategyNumber, F_OIDEQ, reloid);
+	aorel = heap_open(AppendOnlyRelationId, AccessShareLock);
+	tupDesc = RelationGetDescr(aorel);
+	scan = systable_beginscan(aorel, AppendOnlyRelidIndexId,
+							  true /*indexOk*/, NULL /*snapshot*/,
+							  1 /*nkeys*/, &skey);
+	while (HeapTupleIsValid(htup = systable_getnext(scan)))
+	{
+		if (segrelid)
+		{
+			auxoid = heap_getattr(htup,
+								  Anum_pg_appendonly_segrelid,
+								  tupDesc, &isnull);
+			if (!isnull)
+				*segrelid = DatumGetObjectId(auxoid);
+		}
+
+		if (blkdirrelid)
+		{
+			auxoid = heap_getattr(htup,
+								  Anum_pg_appendonly_blkdirrelid,
+								  tupDesc, &isnull);
+			if (!isnull)
+				*blkdirrelid = DatumGetObjectId(auxoid);
+		}
+
+		if (visimaprelid)
+		{
+			auxoid = heap_getattr(htup,
+								  Anum_pg_appendonly_visimaprelid,
+								  tupDesc, &isnull);
+			if (!isnull)
+				*visimaprelid = DatumGetObjectId(auxoid);
+		}
+	}
+
+	systable_endscan(scan);
+	heap_close(aorel, AccessShareLock);
 }
