@@ -10,14 +10,11 @@ SELECT pg_sleep(5);
  
 (1 row)
 
-SELECT tableid::regclass, size, segid FROM diskquota.table_size WHERE tableid = 't1'::regclass ORDER BY segid DESC;
+SELECT tableid::regclass, size, segid FROM diskquota.table_size WHERE tableid = 't1'::regclass and segid = -1;
  tableid |  size   | segid 
 ---------+---------+-------
- t1      | 1310720 |     2
- t1      | 1310720 |     1
- t1      | 1310720 |     0
  t1      | 3932160 |    -1
-(4 rows)
+(1 row)
 
 SELECT pg_table_size('t1');
  pg_table_size 
@@ -26,7 +23,7 @@ SELECT pg_table_size('t1');
 (1 row)
 
 commit;
-drop table t1;
+DROP table t1;
 -- heap table
 begin;
 CREATE TABLE t2(i int);
@@ -39,14 +36,11 @@ SELECT pg_sleep(5);
  
 (1 row)
 
-SELECT tableid::regclass, size, segid FROM diskquota.table_size WHERE tableid = 't2'::regclass ORDER BY segid DESC;
+SELECT tableid::regclass, size, segid FROM diskquota.table_size WHERE tableid = 't2'::regclass and segid = -1;
  tableid |  size   | segid 
 ---------+---------+-------
- t2      | 1310720 |     2
- t2      | 1310720 |     1
- t2      | 1310720 |     0
  t2      | 3932160 |    -1
-(4 rows)
+(1 row)
 
 SELECT pg_table_size('t2');
  pg_table_size 
@@ -55,7 +49,29 @@ SELECT pg_table_size('t2');
 (1 row)
 
 commit;
-drop table t2;
+-- heap table index
+begin;
+CREATE INDEX idx2 on t2(i);
+SELECT pg_sleep(5);
+ pg_sleep 
+----------
+ 
+(1 row)
+
+SELECT tableid::regclass, size, segid FROM diskquota.table_size WHERE tableid = 'idx2'::regclass and segid = -1;
+ tableid |  size   | segid 
+---------+---------+-------
+ idx2    | 2490368 |    -1
+(1 row)
+
+SELECT pg_table_size('idx2');
+ pg_table_size 
+---------------
+       2490368
+(1 row)
+
+commit;
+DROP table t2;
 -- toast table
 begin;
 CREATE TABLE t3(t text);
@@ -68,14 +84,11 @@ SELECT pg_sleep(5);
  
 (1 row)
 
-SELECT tableid::regclass, size, segid FROM diskquota.table_size WHERE tableid = 't3'::regclass ORDER BY segid DESC;
+SELECT tableid::regclass, size, segid FROM diskquota.table_size WHERE tableid = 't3'::regclass and segid = -1;
  tableid |  size  | segid 
 ---------+--------+-------
- t3      |  32768 |     2
- t3      |  32768 |     1
- t3      | 294912 |     0
  t3      | 393216 |    -1
-(4 rows)
+(1 row)
 
 SELECT pg_table_size('t3');
  pg_table_size 
@@ -84,7 +97,7 @@ SELECT pg_table_size('t3');
 (1 row)
 
 commit;
-drop table t3;
+DROP table t3;
 -- AO table
 begin;
 CREATE TABLE ao (i int) WITH (appendonly=true);
@@ -97,14 +110,11 @@ SELECT pg_sleep(5);
  
 (1 row)
 
-SELECT tableid::regclass, size, segid FROM diskquota.table_size WHERE tableid = 'ao'::regclass ORDER BY segid DESC;
+SELECT tableid::regclass, size, segid FROM diskquota.table_size WHERE tableid = 'ao'::regclass and segid = -1;
  tableid |  size   | segid 
 ---------+---------+-------
- ao      |  398192 |     2
- ao      |  399352 |     1
- ao      |  400704 |     0
  ao      | 1263784 |    -1
-(4 rows)
+(1 row)
 
 SELECT pg_table_size('ao');
  pg_table_size 
@@ -113,8 +123,30 @@ SELECT pg_table_size('ao');
 (1 row)
 
 commit;
+-- AOCS table index
+begin;
+CREATE INDEX ao_idx on ao(i);
+SELECT pg_sleep(5);
+ pg_sleep 
+----------
+ 
+(1 row)
+
+SELECT tableid::regclass, size, segid FROM diskquota.table_size WHERE tableid = 'ao_idx'::regclass and segid = -1;
+ tableid |  size   | segid 
+---------+---------+-------
+ ao_idx  | 2490368 |    -1
+(1 row)
+
+SELECT pg_table_size('ao_idx');
+ pg_table_size 
+---------------
+       2490368
+(1 row)
+
+commit;
 DROP TABLE ao;
--- AOSC table
+-- AOCS table
 begin;
 CREATE TABLE aocs (i int, t text) WITH (appendonly=true, orientation=column);
 NOTICE:  Table doesn't have 'DISTRIBUTED BY' clause -- Using column named 'i' as the Greenplum Database data distribution key for this table.
@@ -126,19 +158,38 @@ SELECT pg_sleep(5);
  
 (1 row)
 
-SELECT tableid::regclass, size, segid FROM diskquota.table_size WHERE tableid = 'aocs'::regclass ORDER BY segid DESC;
+SELECT tableid::regclass, size, segid FROM diskquota.table_size WHERE tableid = 'aocs'::regclass and segid = -1;
  tableid |   size   | segid 
 ---------+----------+-------
- aocs    |  3375408 |     2
- aocs    |  3514672 |     1
- aocs    |  3497528 |     0
  aocs    | 10485912 |    -1
-(4 rows)
+(1 row)
 
 SELECT pg_table_size('aocs');
  pg_table_size 
 ---------------
       10485912
+(1 row)
+
+commit;
+-- AOCS table index
+begin;
+CREATE INDEX aocs_idx on aocs(i);
+SELECT pg_sleep(5);
+ pg_sleep 
+----------
+ 
+(1 row)
+
+SELECT tableid::regclass, size, segid FROM diskquota.table_size WHERE tableid = 'aocs_idx'::regclass and segid = -1;
+ tableid  |  size  | segid 
+----------+--------+-------
+ aocs_idx | 524288 |    -1
+(1 row)
+
+SELECT pg_table_size('aocs_idx');
+ pg_table_size 
+---------------
+        524288
 (1 row)
 
 commit;
