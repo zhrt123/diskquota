@@ -20,6 +20,17 @@ commit;
 
 drop table t2;
 
+-- toast table
+begin;
+CREATE TABLE t3(t text);
+INSERT INTO t3 SELECT repeat('a', 10000) FROM generate_series(1, 1000);
+SELECT pg_sleep(5);
+SELECT tableid::regclass, size, segid FROM diskquota.table_size WHERE tableid = 't3'::regclass ORDER BY segid DESC;
+SELECT pg_table_size('t3');
+commit;
+
+drop table t3;
+
 -- AO table
 begin;
 CREATE TABLE ao (i int) WITH (appendonly=true);

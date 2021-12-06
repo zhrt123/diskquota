@@ -56,6 +56,35 @@ SELECT pg_table_size('t2');
 
 commit;
 drop table t2;
+-- toast table
+begin;
+CREATE TABLE t3(t text);
+NOTICE:  Table doesn't have 'DISTRIBUTED BY' clause -- Using column named 't' as the Greenplum Database data distribution key for this table.
+HINT:  The 'DISTRIBUTED BY' clause determines the distribution of data. Make sure column(s) chosen are the optimal data distribution key to minimize skew.
+INSERT INTO t3 SELECT repeat('a', 10000) FROM generate_series(1, 1000);
+SELECT pg_sleep(5);
+ pg_sleep 
+----------
+ 
+(1 row)
+
+SELECT tableid::regclass, size, segid FROM diskquota.table_size WHERE tableid = 't3'::regclass ORDER BY segid DESC;
+ tableid |  size  | segid 
+---------+--------+-------
+ t3      |  32768 |     2
+ t3      |  32768 |     1
+ t3      | 294912 |     0
+ t3      | 393216 |    -1
+(4 rows)
+
+SELECT pg_table_size('t3');
+ pg_table_size 
+---------------
+        393216
+(1 row)
+
+commit;
+drop table t3;
 -- AO table
 begin;
 CREATE TABLE ao (i int) WITH (appendonly=true);
