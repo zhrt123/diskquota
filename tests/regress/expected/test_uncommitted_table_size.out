@@ -10,7 +10,7 @@ SELECT pg_sleep(5);
  
 (1 row)
 
-SELECT tableid::regclass, size, segid from diskquota.table_size where tableid = 't1'::regclass order by segid desc;SELECT pg_table_size('t1');
+SELECT tableid::regclass, size, segid FROM diskquota.table_size WHERE tableid = 't1'::regclass ORDER BY segid DESC;
  tableid |  size   | segid 
 ---------+---------+-------
  t1      | 1310720 |     2
@@ -19,6 +19,7 @@ SELECT tableid::regclass, size, segid from diskquota.table_size where tableid = 
  t1      | 3932160 |    -1
 (4 rows)
 
+SELECT pg_table_size('t1');
  pg_table_size 
 ---------------
        3932160
@@ -38,7 +39,7 @@ SELECT pg_sleep(5);
  
 (1 row)
 
-SELECT tableid::regclass, size, segid from diskquota.table_size where tableid = 't2'::regclass order by segid desc;SELECT pg_table_size('t2');
+SELECT tableid::regclass, size, segid FROM diskquota.table_size WHERE tableid = 't2'::regclass ORDER BY segid DESC;
  tableid |  size   | segid 
 ---------+---------+-------
  t2      | 1310720 |     2
@@ -47,6 +48,7 @@ SELECT tableid::regclass, size, segid from diskquota.table_size where tableid = 
  t2      | 3932160 |    -1
 (4 rows)
 
+SELECT pg_table_size('t2');
  pg_table_size 
 ---------------
        3932160
@@ -66,7 +68,7 @@ SELECT pg_sleep(5);
  
 (1 row)
 
-SELECT tableid::regclass, size, segid from diskquota.table_size where tableid = 'ao'::regclass order by segid desc;SELECT pg_table_size('ao');
+SELECT tableid::regclass, size, segid FROM diskquota.table_size WHERE tableid = 'ao'::regclass ORDER BY segid DESC;
  tableid |  size   | segid 
 ---------+---------+-------
  ao      |  398192 |     2
@@ -75,6 +77,7 @@ SELECT tableid::regclass, size, segid from diskquota.table_size where tableid = 
  ao      | 1263784 |    -1
 (4 rows)
 
+SELECT pg_table_size('ao');
  pg_table_size 
 ---------------
        1263784
@@ -94,7 +97,7 @@ SELECT pg_sleep(5);
  
 (1 row)
 
-SELECT tableid::regclass, size, segid from diskquota.table_size where tableid = 'aocs'::regclass order by segid desc;SELECT pg_table_size('aocs');
+SELECT tableid::regclass, size, segid FROM diskquota.table_size WHERE tableid = 'aocs'::regclass ORDER BY segid DESC;
  tableid |   size   | segid 
 ---------+----------+-------
  aocs    |  3375408 |     2
@@ -103,6 +106,7 @@ SELECT tableid::regclass, size, segid from diskquota.table_size where tableid = 
  aocs    | 10485912 |    -1
 (4 rows)
 
+SELECT pg_table_size('aocs');
  pg_table_size 
 ---------------
       10485912

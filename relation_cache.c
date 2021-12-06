@@ -453,7 +453,7 @@ get_relation_entry_from_pg_class(Oid relid, DiskQuotaRelationCacheEntry* relatio
 	relation_entry->rnode.backend = classForm->relpersistence == RELPERSISTENCE_TEMP ? 
 									TempRelBackendId : InvalidBackendId;
 
-	// toast table
+	/* toast table */
 	if (OidIsValid(classForm->reltoastrelid))
 	{
 		add_auxrelation_to_relation_entry(classForm->reltoastrelid, relation_entry);
@@ -461,7 +461,7 @@ get_relation_entry_from_pg_class(Oid relid, DiskQuotaRelationCacheEntry* relatio
 
 	heap_freetuple(classTup);
 
-	// // ao table
+	/* ao table */
 	GetAppendOnlyEntryAuxOidListByRelid(relid, &segrelid, &blkdirrelid, &visimaprelid);
 	if (OidIsValid(segrelid))
 	{
