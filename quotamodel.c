@@ -768,8 +768,6 @@ static List*
 merge_uncommitted_table_to_oidlist(List *oidlist)
 {
 	HASH_SEQ_STATUS 			 iter;
-	Oid							 relid;
-	ListCell   		   			*l;
 	DiskQuotaRelationCacheEntry *entry;
 
 	if (relation_cache == NULL)
@@ -777,13 +775,9 @@ merge_uncommitted_table_to_oidlist(List *oidlist)
 		return oidlist;
 	}
 
-	LWLockAcquire(diskquota_locks.relation_cache_lock, LW_EXCLUSIVE);
-	foreach(l, oidlist)
-	{
-		relid = lfirst_oid(l);
-		remove_cache_entry_recursion_wio_lock(relid);
-	}
+	remove_committed_relation_from_cache();
 
+	LWLockAcquire(diskquota_locks.relation_cache_lock, LW_EXCLUSIVE);
 	hash_seq_init(&iter, relation_cache);
 	while ((entry = hash_seq_search(&iter)) != NULL)
 	{
