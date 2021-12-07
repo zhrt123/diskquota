@@ -1795,7 +1795,7 @@ refresh_blackmap(PG_FUNCTION_ARGS)
 					}
 
 					/* Append ao auxiliary relations and their indexes to the oid_list if any. */
-					GetAppendOnlyEntryAuxOidListByRelid(active_oid, &aosegrelid,
+					diskquota_get_appendonly_aux_oid_list(active_oid, &aosegrelid,
 														&aoblkdirrelid, &aovisimaprelid);
 					if (OidIsValid(aosegrelid))
 					{

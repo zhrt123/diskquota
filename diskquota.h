@@ -122,5 +122,5 @@ extern List *get_rel_oid_list(void);
 extern int64 calculate_relation_size_all_forks(RelFileNodeBackend *rnode, char relstorage);
 extern Relation diskquota_relation_open(Oid relid, LOCKMODE mode);
 extern List* diskquota_get_index_list(Oid relid);
-extern void GetAppendOnlyEntryAuxOidListByRelid(Oid reloid, Oid *segrelid, Oid *blkdirrelid, Oid *visimaprelid);
+extern void diskquota_get_appendonly_aux_oid_list(Oid reloid, Oid *segrelid, Oid *blkdirrelid, Oid *visimaprelid);
 #endif

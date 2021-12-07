@@ -1175,7 +1175,7 @@ get_rel_oid_list(void)
 		oid = DatumGetObjectId(SPI_getbinval(tup,tupdesc, 1, &isnull));
 		if (!isnull)
 		{
-			List	   	*indexIds;
+			List *indexIds;
 			oidlist = lappend_oid(oidlist, oid);
 			indexIds = diskquota_get_index_list(oid);
 			if (indexIds != NIL )
@@ -1351,7 +1351,7 @@ diskquota_get_index_list(Oid relid)
  * Get auxiliary relations oid by searching the pg_appendonly table.
  */
 void
-GetAppendOnlyEntryAuxOidListByRelid(Oid reloid, Oid *segrelid, Oid *blkdirrelid, Oid *visimaprelid)
+diskquota_get_appendonly_aux_oid_list(Oid reloid, Oid *segrelid, Oid *blkdirrelid, Oid *visimaprelid)
 {
 	ScanKeyData			skey;
 	SysScanDesc			scan;

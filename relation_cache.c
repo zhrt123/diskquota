@@ -462,7 +462,7 @@ get_relation_entry_from_pg_class(Oid relid, DiskQuotaRelationCacheEntry* relatio
 	heap_freetuple(classTup);
 
 	/* ao table */
-	GetAppendOnlyEntryAuxOidListByRelid(relid, &segrelid, &blkdirrelid, &visimaprelid);
+	diskquota_get_appendonly_aux_oid_list(relid, &segrelid, &blkdirrelid, &visimaprelid);
 	if (OidIsValid(segrelid))
 	{
 		add_auxrelation_to_relation_entry(segrelid, relation_entry);
@@ -561,25 +561,4 @@ calculate_table_size(Oid relid)
 	get_relation_entry(relid, &entry);
 
 	return do_calculate_table_size(&entry);
-}
-
-void
-remove_cache_entry_recursion_wio_lock(Oid relid)
-{
-	DiskQuotaRelationCacheEntry *relation_entry;
-	int i;
-
-	if (OidIsValid(relid))
-	{
-		relation_entry = hash_search(relation_cache, &relid, HASH_FIND, NULL);
-		if (relation_entry)
-		{
-			for (i = 0; i < relation_entry->auxrel_num; i++)
-			{
-				remove_cache_entry_recursion_wio_lock(relation_entry->auxrel_oid[i]);
-			}
-			hash_search(relid_cache, &relation_entry->rnode.node.relNode, HASH_REMOVE, NULL);
-			hash_search(relation_cache, &relid, HASH_REMOVE, NULL);
-		}
-	}
 }

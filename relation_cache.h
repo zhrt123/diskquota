@@ -34,6 +34,5 @@ extern void update_relation_cache(Oid relid);
 extern Oid get_primary_table_oid(Oid relid);
 extern void remove_committed_relation_from_cache(void);
 extern Size calculate_table_size(Oid relid);
-extern void remove_cache_entry_recursion_wio_lock(Oid relid);
 
 #endif
