@@ -777,7 +777,7 @@ merge_uncommitted_table_to_oidlist(List *oidlist)
 
 	remove_committed_relation_from_cache();
 
-	LWLockAcquire(diskquota_locks.relation_cache_lock, LW_EXCLUSIVE);
+	LWLockAcquire(diskquota_locks.relation_cache_lock, LW_SHARED);
 	hash_seq_init(&iter, relation_cache);
 	while ((entry = hash_seq_search(&iter)) != NULL)
 	{
