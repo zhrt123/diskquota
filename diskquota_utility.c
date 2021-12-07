@@ -1307,7 +1307,7 @@ diskquota_relation_open(Oid relid, LOCKMODE mode)
 List*
 diskquota_get_index_list(Oid relid)
 {
-    Relation	indrel;
+	Relation	indrel;
 	SysScanDesc indscan;
 	ScanKeyData skey;
 	HeapTuple	htup;

@@ -556,7 +556,7 @@ do_calculate_table_size(DiskQuotaRelationCacheEntry *entry)
 Size
 calculate_table_size(Oid relid)
 {
-    DiskQuotaRelationCacheEntry entry = {0};
+	DiskQuotaRelationCacheEntry entry = {0};
 
 	get_relation_entry(relid, &entry);
 
