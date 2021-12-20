@@ -289,7 +289,8 @@ remove_committed_relation_from_cache(void)
 	hash_seq_init(&iter, local_relation_cache);
 	while ((local_entry = hash_seq_search(&iter)) != NULL)
 	{
-		/* The committed table's oid can be fetched by RelidByRelfilenode().
+		/*
+		 * The committed table's oid can be fetched by RelidByRelfilenode().
 		 * If the table's relfilenode is modified and its relation_cache_entry
 		 * remains in relation_cache, the outdated relation_cache_entry should 
 		 * be removed.
