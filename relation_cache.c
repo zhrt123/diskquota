@@ -414,11 +414,11 @@ add_auxrelation_to_relation_entry(Oid relid, DiskQuotaRelationCacheEntry *pentry
 }
 
 /*
- * Returns true iff blkdirrelid missing.
+ * Returns true iff blkdirrelid is missing.
  * pg_aoblkdir_xxxx is created by `create index on ao_table`, which can not be
- * searched by diskquota_get_appendonly_aux_oid_list() before index's creation 
- * finish. By returning true to inform caller blkdirrelid missing, then caller
- * will fetch blkdirrelid by traversing relation_cache.
+ * fetched by diskquota_get_appendonly_aux_oid_list() before index's creation 
+ * finish. By returning true to inform the caller that blkdirrelid is missing,
+ * then the caller will fetch blkdirrelid by traversing relation_cache.
  */
 static bool
 get_relation_entry_from_pg_class(Oid relid, DiskQuotaRelationCacheEntry* relation_entry)
