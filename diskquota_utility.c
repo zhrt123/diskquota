@@ -88,7 +88,6 @@ init_table_size_table(PG_FUNCTION_ARGS)
 {
 	int		ret;
 	StringInfoData	buf;
-	StringInfoData	insert_buf;
 
 	RangeVar   	*rv;
 	Relation	rel;
@@ -127,7 +126,6 @@ init_table_size_table(PG_FUNCTION_ARGS)
 
 	/* delete all the table size info in table_size if exist. */
 	initStringInfo(&buf);
-	initStringInfo(&insert_buf);
 	appendStringInfo(&buf, "truncate table diskquota.table_size;");
 	ret = SPI_execute(buf.data, false, 0);
 	if (ret != SPI_OK_UTILITY)
@@ -274,7 +272,7 @@ pull_all_table_size(PG_FUNCTION_ARGS)
 		tupdesc = CreateTemplateTupleDesc(3, false /*hasoid*/);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 1, "TABLEID", OIDOID, -1 /*typmod*/, 0 /*attdim*/);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 2, "SIZE", INT8OID, -1 /*typmod*/, 0 /*attdim*/);
-		TupleDescInitEntry(tupdesc, (AttrNumber) 3, "SEGID", INT4OID, -1 /*typmod*/, 0 /*attdim*/);
+		TupleDescInitEntry(tupdesc, (AttrNumber) 3, "SEGID", INT2OID, -1 /*typmod*/, 0 /*attdim*/);
 		funcctx->tuple_desc = BlessTupleDesc(tupdesc);
 
 		/* Create a local hash table and fill it with entries from shared memory. */
