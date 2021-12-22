@@ -157,7 +157,7 @@ init_table_size_table(PG_FUNCTION_ARGS)
 		resetStringInfo(&buf);
 		appendStringInfo(&buf, "INSERT INTO diskquota.table_size WITH total_size AS "
 								"(SELECT * from diskquota.pull_all_table_size() "
-								"UNION ALL SELECT tableid, size, segid FROM table_size) "	
+								"UNION ALL SELECT tableid, size, segid FROM diskquota.table_size) "	
 								"SELECT tableid, sum(size) as size, -1 as segid FROM total_size GROUP BY tableid;");
 		ret = SPI_execute(buf.data, false, 0);
 		if (ret != SPI_OK_INSERT)
