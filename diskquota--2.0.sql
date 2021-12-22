@@ -171,10 +171,13 @@ GROUP BY pgc.relowner, reltablespace, pgr.rolname, pgsp.spcname, qc.quotalimitMB
 -- prepare to boot
 INSERT INTO diskquota.state SELECT (count(relname) = 0)::int FROM pg_class AS c, pg_namespace AS n WHERE c.oid > 16384 AND relnamespace = n.oid AND nspname != 'diskquota';
 
-CREATE FUNCTION diskquota.diskquota_start_worker() RETURNS void STRICT AS '$libdir/diskquota-2.0.so' LANGUAGE C;
-SELECT diskquota.diskquota_start_worker();
-DROP FUNCTION diskquota.diskquota_start_worker();
-
 -- re-dispatch pause status to false. in case user pause-drop-recreate.
 -- refer to see test case 'test_drop_after_pause'
 SELECT FROM diskquota.resume();
+
+CREATE OR REPLACE FUNCTION diskquota.pull_all_table_size(OUT tableid oid, OUT size bigint, OUT segid int) RETURNS SETOF RECORD AS 'MODULE_PATHNAME', 'pull_all_table_size' LANGUAGE C;
+
+-- Starting the worker has to be the last step.
+CREATE FUNCTION diskquota.diskquota_start_worker() RETURNS void STRICT AS '$libdir/diskquota-2.0.so' LANGUAGE C;
+SELECT diskquota.diskquota_start_worker();
+DROP FUNCTION diskquota.diskquota_start_worker();
