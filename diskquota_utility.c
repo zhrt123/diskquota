@@ -222,7 +222,7 @@ calculate_all_table_size()
 
 		rnode.node.dbNode = MyDatabaseId;
 		rnode.node.relNode = classForm->relfilenode;
-		rnode.node.spcNode = OidIsValid(classForm->reltablespace) ? classForm->reltablespace : DEFAULTTABLESPACE_OID;
+		rnode.node.spcNode = OidIsValid(classForm->reltablespace) ? classForm->reltablespace : MyDatabaseTableSpace;
 		rnode.backend = classForm->relpersistence == RELPERSISTENCE_TEMP ? TempRelBackendId : InvalidBackendId;
 		tablesize = calculate_relation_size_all_forks(&rnode, classForm->relstorage);
 
