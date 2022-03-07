@@ -145,7 +145,7 @@ init_table_size_table(PG_FUNCTION_ARGS)
 	else
 	{
 		resetStringInfo(&buf);
-		appendStringInfo(&buf, "insert into diskquota.table_size WITH all_size AS "
+		appendStringInfo(&buf, "INSERT INTO diskquota.table_size WITH all_size AS "
 								"(SELECT diskquota.pull_all_table_size() as a FROM gp_dist_random('gp_id')) "	
 								"SELECT (a).* FROM all_size;");
 		ret = SPI_execute(buf.data, false, 0);
@@ -153,6 +153,7 @@ init_table_size_table(PG_FUNCTION_ARGS)
 			elog(ERROR, "cannot insert into table_size table: error code %d", ret);
 
 		resetStringInfo(&buf);
+        /* size is the sum of size on master and on all segments when segid == -1. */
 		appendStringInfo(&buf, "INSERT INTO diskquota.table_size WITH total_size AS "
 								"(SELECT * from diskquota.pull_all_table_size() "
 								"UNION ALL SELECT tableid, size, segid FROM diskquota.table_size) "	
